@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  测试:
+  Test-and-Benchmark:
     name: Test and Benchmark
     runs-on: ubuntu-latest
     steps:
@@ -33,7 +33,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat test-results.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          
+
       - name: Save benchmark results as summary
         if: success() || failure()
         run: |
