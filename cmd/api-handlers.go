@@ -14,12 +14,13 @@ import (
 )
 
 type apiHandlers struct {
-	obj ObjectLayer
+	obj   ObjectLayer
+	creds Credentials
 }
 
-func NewRouter(obj ObjectLayer) http.Handler {
+func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 	r := mux.NewRouter()
-	api := apiHandlers{obj: obj}
+	api := apiHandlers{obj: obj, creds: creds}
 
 	// Bucket-level
 	r.Methods("GET").Path("/").HandlerFunc(api.ListBuckets)
@@ -40,7 +41,32 @@ func NewRouter(obj ObjectLayer) http.Handler {
 	r.Methods("HEAD").Path("/{bucket}/{object:.+}").HandlerFunc(api.HeadObject)
 	r.Methods("DELETE").Path("/{bucket}/{object:.+}").HandlerFunc(api.DeleteObject)
 
-	return r
+	// If no credentials configured, skip auth.
+	if creds.AccessKey == "" {
+		return r
+	}
+	return authMiddleware(creds, r)
+}
+
+func authMiddleware(creds Credentials, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		if r.URL.Query().Get("X-Amz-Signature") != "" {
+			// Presigned request
+			if err = r.ParseForm(); err == nil {
+				err = verifyPresignedAuth(r, creds)
+			}
+		} else if r.Header.Get("Authorization") != "" {
+			err = verifyHeaderAuth(r, creds)
+		} else {
+			err = fmt.Errorf("missing authentication")
+		}
+		if err != nil {
+			writeError(w, http.StatusForbidden, "AccessDenied", err.Error())
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // --- Bucket handlers ---
@@ -335,18 +361,12 @@ func (a *apiHandlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Reques
 
 // --- Presign ---
 
-// PresignGetObject generates a presigned GET URL valid for the given duration.
 func PresignGetObject(baseURL, bucket, object, accessKey, secretKey string, expiry time.Duration) string {
-	expires := strconv.FormatInt(int64(expiry.Seconds()), 10)
-	u := fmt.Sprintf("%s/%s/%s?X-Amz-Expires=%s&X-Amz-SignatureVersion=unsigned", baseURL, bucket, object, expires)
-	return u
+	return PresignURL(baseURL, http.MethodGet, bucket, object, accessKey, secretKey, expiry)
 }
 
-// PresignPutObject generates a presigned PUT URL.
 func PresignPutObject(baseURL, bucket, object, accessKey, secretKey string, expiry time.Duration) string {
-	expires := strconv.FormatInt(int64(expiry.Seconds()), 10)
-	u := fmt.Sprintf("%s/%s/%s?X-Amz-Expires=%s&X-Amz-SignatureVersion=unsigned", baseURL, bucket, object, expires)
-	return u
+	return PresignURL(baseURL, http.MethodPut, bucket, object, accessKey, secretKey, expiry)
 }
 
 // --- Helpers ---

@@ -1,0 +1,202 @@
+package cmd_test
+
+import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sanbei101/mini-minio/cmd"
+)
+
+func hmacSHA256(key, data []byte) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write(data)
+	return h.Sum(nil)
+}
+
+func hashSHA256(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+func signingKey(secretKey string, t time.Time) []byte {
+	date := hmacSHA256([]byte("AWS4"+secretKey), []byte(t.Format("20060102")))
+	reg := hmacSHA256(date, []byte("us-east-1"))
+	svc := hmacSHA256(reg, []byte("s3"))
+	return hmacSHA256(svc, []byte("aws4_request"))
+}
+
+// signRequest adds a SigV4 Authorization header to req.
+func signRequest(t *testing.T, req *http.Request, accessKey, secretKey string) {
+	t.Helper()
+	now := time.Now().UTC()
+	dateStr := now.Format("20060102T150405Z")
+	dateOnly := now.Format("20060102")
+	scope := dateOnly + "/us-east-1/s3/aws4_request"
+
+	req.Header.Set("X-Amz-Date", dateStr)
+	req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+	if req.Host == "" {
+		req.Host = req.URL.Host
+	}
+
+	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
+	canonHdr := fmt.Sprintf("host:%s\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:%s\n", req.Host, dateStr)
+
+	canonReq := strings.Join([]string{
+		req.Method,
+		req.URL.EscapedPath(),
+		req.URL.RawQuery,
+		canonHdr,
+		signedHeaders,
+		"UNSIGNED-PAYLOAD",
+	}, "\n")
+
+	stringToSign := "AWS4-HMAC-SHA256\n" + dateStr + "\n" + scope + "\n" + hashSHA256([]byte(canonReq))
+	key := signingKey(secretKey, now)
+	sig := hex.EncodeToString(hmacSHA256(key, []byte(stringToSign)))
+
+	req.Header.Set("Authorization", fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/%s,SignedHeaders=%s,Signature=%s",
+		accessKey, scope, signedHeaders, sig,
+	))
+}
+
+func setup(t *testing.T) (*httptest.Server, string, string) {
+	t.Helper()
+	disks := make([]string, 6)
+	for i := range disks {
+		disks[i] = t.TempDir()
+	}
+	obj, err := cmd.NewErasureObjects(disks, 4, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ak, sk := "testkey", "testsecret"
+	srv := httptest.NewServer(cmd.NewRouter(obj, cmd.Credentials{AccessKey: ak, SecretKey: sk}))
+	t.Cleanup(srv.Close)
+	return srv, ak, sk
+}
+
+func TestNoAuthRejected(t *testing.T) {
+	srv, _, _ := setup(t)
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestBucketAndObjectCRUD(t *testing.T) {
+	srv, ak, sk := setup(t)
+	client := srv.Client()
+
+	do := func(method, path string, body io.Reader) *http.Response {
+		req, _ := http.NewRequest(method, srv.URL+path, body)
+		req.Host = strings.TrimPrefix(srv.URL, "http://")
+		signRequest(t, req, ak, sk)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	// Create bucket
+	if r := do("PUT", "/mybucket", nil); r.StatusCode != 200 {
+		t.Fatalf("create bucket: %d", r.StatusCode)
+	}
+
+	// Put object
+	if r := do("PUT", "/mybucket/hello.txt", strings.NewReader("hello world")); r.StatusCode != 200 {
+		t.Fatalf("put object: %d", r.StatusCode)
+	}
+
+	// Get object
+	r := do("GET", "/mybucket/hello.txt", nil)
+	if r.StatusCode != 200 {
+		t.Fatalf("get object: %d", r.StatusCode)
+	}
+	body, _ := io.ReadAll(r.Body)
+	if string(body) != "hello world" {
+		t.Fatalf("body mismatch: %q", body)
+	}
+
+	// List objects
+	r = do("GET", "/mybucket", nil)
+	if r.StatusCode != 200 {
+		t.Fatalf("list objects: %d", r.StatusCode)
+	}
+	listBody, _ := io.ReadAll(r.Body)
+	if !bytes.Contains(listBody, []byte("hello.txt")) {
+		t.Fatalf("hello.txt not in list: %s", listBody)
+	}
+
+	// Delete object
+	if r := do("DELETE", "/mybucket/hello.txt", nil); r.StatusCode != 204 {
+		t.Fatalf("delete object: %d", r.StatusCode)
+	}
+
+	// Delete bucket
+	if r := do("DELETE", "/mybucket", nil); r.StatusCode != 204 {
+		t.Fatalf("delete bucket: %d", r.StatusCode)
+	}
+}
+
+func TestPresignedURLs(t *testing.T) {
+	srv, ak, sk := setup(t)
+	client := srv.Client()
+
+	// First create bucket with signed request
+	req, _ := http.NewRequest("PUT", srv.URL+"/presignbucket", nil)
+	req.Host = strings.TrimPrefix(srv.URL, "http://")
+	signRequest(t, req, ak, sk)
+	if r, _ := client.Do(req); r.StatusCode != 200 {
+		t.Fatal("create bucket failed")
+	}
+
+	// Generate presigned PUT URL
+	putURL := cmd.PresignPutObject(srv.URL, "presignbucket", "file.txt", ak, sk, 10*time.Minute)
+	// Replace host in URL to match test server
+	putURL = strings.Replace(putURL, "localhost:9000", strings.TrimPrefix(srv.URL, "http://"), 1)
+
+	putReq, _ := http.NewRequest("PUT", putURL, strings.NewReader("presigned content"))
+	putReq.Host = strings.TrimPrefix(srv.URL, "http://")
+	r, err := client.Do(putReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StatusCode != 200 {
+		body, _ := io.ReadAll(r.Body)
+		t.Fatalf("presigned PUT: %d — %s", r.StatusCode, body)
+	}
+
+	// Generate presigned GET URL
+	getURL := cmd.PresignGetObject(srv.URL, "presignbucket", "file.txt", ak, sk, 10*time.Minute)
+	getURL = strings.Replace(getURL, "localhost:9000", strings.TrimPrefix(srv.URL, "http://"), 1)
+
+	getReq, _ := http.NewRequest("GET", getURL, nil)
+	getReq.Host = strings.TrimPrefix(srv.URL, "http://")
+	r, err = client.Do(getReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StatusCode != 200 {
+		body, _ := io.ReadAll(r.Body)
+		t.Fatalf("presigned GET: %d — %s", r.StatusCode, body)
+	}
+	body, _ := io.ReadAll(r.Body)
+	if string(body) != "presigned content" {
+		t.Fatalf("body mismatch: %q", body)
+	}
+}

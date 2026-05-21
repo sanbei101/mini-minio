@@ -17,6 +17,8 @@ func main() {
 	dataDir := flag.String("data", "./data", "base data directory")
 	data := flag.Int("data-blocks", 4, "number of data blocks")
 	parity := flag.Int("parity-blocks", 2, "number of parity blocks")
+	accessKey := flag.String("access-key", "", "S3 access key (empty = no auth)")
+	secretKey := flag.String("secret-key", "", "S3 secret key")
 	flag.Parse()
 
 	total := *data + *parity
@@ -35,7 +37,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	router := cmd.NewRouter(obj)
+	router := cmd.NewRouter(obj, cmd.Credentials{AccessKey: *accessKey, SecretKey: *secretKey})
 	log.Printf("mini-minio listening on %s", *addr)
 	log.Fatal(http.ListenAndServe(*addr, router))
 }
