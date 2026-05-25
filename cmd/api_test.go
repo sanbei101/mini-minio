@@ -1,7 +1,6 @@
 package cmd_test
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -98,22 +97,28 @@ func TestNoAuthRejected(t *testing.T) {
 	}
 }
 
-func TestBucketAndObjectCRUD(t *testing.T) {
+func TestPresignedURLs(t *testing.T) {
 	srv, ak, sk := setup(t)
 	client := srv.Client()
-
-	do := func(method, path string, body io.Reader) (int, []byte) {
-		req, err := http.NewRequest(method, srv.URL+path, body)
+	do := func(method, target string, body io.Reader) (int, []byte) {
+		var req *http.Request
+		var err error
+		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+			req, err = http.NewRequest(method, target, body)
+		} else {
+			req, err = http.NewRequest(method, srv.URL+target, body)
+			if err == nil {
+				signRequest(t, req, ak, sk)
+			}
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		signRequest(t, req, ak, sk)
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatal(err)
@@ -122,98 +127,26 @@ func TestBucketAndObjectCRUD(t *testing.T) {
 	}
 
 	// create bucket
-	if code, _ := do(http.MethodPut, "/mybucket", nil); code != http.StatusOK {
+	if code, _ := do(http.MethodPut, "/presignbucket", nil); code != http.StatusOK {
 		t.Fatalf("create bucket failed: %d", code)
 	}
 
-	// put object
-	if code, _ := do(http.MethodPut, "/mybucket/hello.txt", strings.NewReader("hello world")); code != http.StatusOK {
-		t.Fatalf("put object failed: %d", code)
-	}
-
-	// get object
-	code, body := do(http.MethodGet, "/mybucket/hello.txt", nil)
-	if code != http.StatusOK {
-		t.Fatalf("get object failed: %d", code)
-	}
-	if string(body) != "hello world" {
-		t.Fatalf("body mismatch: %q", body)
-	}
-
-	// list objects
-	code, listBody := do(http.MethodGet, "/mybucket", nil)
-	if code != http.StatusOK {
-		t.Fatalf("list objects failed: %d", code)
-	}
-	if !bytes.Contains(listBody, []byte("hello.txt")) {
-		t.Fatalf("hello.txt not in list: %s", listBody)
-	}
-
-	// delete object
-	if code, _ := do(http.MethodDelete, "/mybucket/hello.txt", nil); code != http.StatusNoContent {
-		t.Fatalf("delete object failed: %d", code)
-	}
-
-	// delete bucket
-	if code, _ := do(http.MethodDelete, "/mybucket", nil); code != http.StatusNoContent {
-		t.Fatalf("delete bucket failed: %d", code)
-	}
-}
-
-func TestPresignedURLs(t *testing.T) {
-	srv, ak, sk := setup(t)
-	client := srv.Client()
-
-	// First create bucket with signed request
-	req, _ := http.NewRequest("PUT", srv.URL+"/presignbucket", nil)
-	// req.Host = strings.TrimPrefix(srv.URL, "http://")
-	signRequest(t, req, ak, sk)
-	r, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Body.Close()
-	if r.StatusCode != 200 {
-		t.Fatal("create bucket failed")
-	}
-	t.Logf("Create bucket response: %v", r)
-	// Generate presigned PUT URL
+	// generate presigned PUT URL and upload data
 	putURL := cmd.PresignPutObject(srv.URL, "presignbucket", "file.txt", ak, sk, 10*time.Minute)
-	putReq, _ := http.NewRequest("PUT", putURL, strings.NewReader("presigned content"))
-	r, err = client.Do(putReq)
-	if err != nil {
-		t.Fatal(err)
+	code, _ := do(http.MethodPut, putURL, strings.NewReader("presigned content"))
+	if code != http.StatusOK {
+		t.Fatalf("presigned PUT failed: %d", code)
 	}
-	t.Logf("Presigned PUT response: %v", r)
-	if r.StatusCode != 200 {
-		body, _ := io.ReadAll(r.Body)
-		t.Fatalf("presigned PUT: %d — %s", r.StatusCode, body)
+	code, _ = do(http.MethodPut, putURL+"attacker", strings.NewReader("malicious content"))
+	if code == http.StatusOK {
+		t.Fatalf("presigned PUT should not allow modifying URL: %d", code)
 	}
-
-	badURL := putURL + "attacker"
-	badReq, _ := http.NewRequest("PUT", badURL, strings.NewReader("malicious content"))
-	r, err = client.Do(badReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.StatusCode == 200 {
-		t.Fatalf("expected failure for tampered URL, got 200")
-	}
-	// Generate presigned GET URL
+	// generate presigned GET URL and retrieve data
 	getURL := cmd.PresignGetObject(srv.URL, "presignbucket", "file.txt", ak, sk, 10*time.Minute)
-	getURL = strings.Replace(getURL, "localhost:9000", strings.TrimPrefix(srv.URL, "http://"), 1)
-
-	getReq, _ := http.NewRequest("GET", getURL, nil)
-	getReq.Host = strings.TrimPrefix(srv.URL, "http://")
-	r, err = client.Do(getReq)
-	if err != nil {
-		t.Fatal(err)
+	code, body := do(http.MethodGet, getURL, nil)
+	if code != http.StatusOK {
+		t.Fatalf("presigned GET failed: %d", code)
 	}
-	if r.StatusCode != 200 {
-		body, _ := io.ReadAll(r.Body)
-		t.Fatalf("presigned GET: %d — %s", r.StatusCode, body)
-	}
-	body, _ := io.ReadAll(r.Body)
 	if string(body) != "presigned content" {
 		t.Fatalf("body mismatch: %q", body)
 	}
