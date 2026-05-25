@@ -364,12 +364,12 @@ func (rs *HTTPRangeSpec) GetOffsetLength(size int64) (int64, int64, error) {
 // --- Multipart upload ---
 
 type multipartUpload struct {
-	bucket  string
-	object  string
-	id      string
-	parts   map[int][]byte
-	etags   map[int]string
-	mu      sync.Mutex
+	bucket string
+	object string
+	id     string
+	parts  map[int][]byte
+	etags  map[int]string
+	mu     sync.Mutex
 }
 
 var (

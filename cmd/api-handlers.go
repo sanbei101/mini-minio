@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -223,14 +222,14 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	gr, err := a.obj.GetObjectNInfo(r.Context(), bucket, object, rs, r.Header)
+	objReader, err := a.obj.GetObjectNInfo(r.Context(), bucket, object, rs, r.Header)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "NoSuchKey", err.Error())
 		return
 	}
-	defer gr.Close()
+	defer objReader.Close()
 
-	info := gr.ObjInfo
+	info := objReader.ObjInfo
 	w.Header().Set("Content-Type", info.ContentType)
 	w.Header().Set("ETag", `"`+info.ETag+`"`)
 	w.Header().Set("Last-Modified", info.ModTime.UTC().Format(http.TimeFormat))
@@ -244,22 +243,22 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
 		w.WriteHeader(http.StatusOK)
 	}
-	io.Copy(w, gr)
+	io.Copy(w, objReader)
 }
 
 func (a *apiHandlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	bucket, object := vars["bucket"], vars["object"]
 
-	info, err := a.obj.GetObjectInfo(r.Context(), bucket, object)
+	objInfo, err := a.obj.GetObjectInfo(r.Context(), bucket, object)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", info.ContentType)
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
-	w.Header().Set("ETag", `"`+info.ETag+`"`)
-	w.Header().Set("Last-Modified", info.ModTime.UTC().Format(http.TimeFormat))
+	w.Header().Set("Content-Type", objInfo.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(objInfo.Size, 10))
+	w.Header().Set("ETag", `"`+objInfo.ETag+`"`)
+	w.Header().Set("Last-Modified", objInfo.ModTime.UTC().Format(http.TimeFormat))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -413,6 +412,3 @@ func parseRangeSpec(s string) (*HTTPRangeSpec, error) {
 	}
 	return &HTTPRangeSpec{Start: start, End: end}, nil
 }
-
-// suppress unused import warning
-var _ = url.QueryEscape
