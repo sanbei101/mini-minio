@@ -6,12 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const metaFile = "xl.meta"
 
 var (
-	ErrNotFound   = errors.New("not found")
+	ErrNotFound     = errors.New("not found")
 	ErrBucketExists = errors.New("bucket already exists")
 )
 
@@ -121,22 +122,39 @@ func (d *Disk) DeleteObject(bucket, object string) error {
 
 func (d *Disk) ListObjects(bucket, prefix string) ([]string, error) {
 	dir := filepath.Join(d.path, bucket)
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
 	}
+
+	var names []string
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Name() != metaFile {
+			return nil
+		}
+
+		rel, err := filepath.Rel(dir, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		name := filepath.ToSlash(rel)
+		if prefix == "" || strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			name := e.Name()
-			if prefix == "" || len(name) >= len(prefix) && name[:len(prefix)] == prefix {
-				names = append(names, name)
-			}
-		}
-	}
+
 	return names, nil
 }
 

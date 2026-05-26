@@ -47,6 +47,10 @@ type erasureObjects struct {
 
 // NewErasureObjects creates an ObjectLayer backed by the given disk paths.
 func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (ObjectLayer, error) {
+	return NewErasureSets(diskPaths, dataBlocks, parityBlocks)
+}
+
+func newSingleErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (*erasureObjects, error) {
 	if len(diskPaths) != dataBlocks+parityBlocks {
 		return nil, fmt.Errorf("need %d disk paths, got %d", dataBlocks+parityBlocks, len(diskPaths))
 	}
@@ -68,10 +72,18 @@ func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (Object
 func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	exists := 0
 	for _, d := range e.disks {
-		if err := d.MakeBucket(bucket); err != nil && !errors.Is(err, storage.ErrBucketExists) {
+		if err := d.MakeBucket(bucket); err != nil {
+			if errors.Is(err, storage.ErrBucketExists) {
+				exists++
+				continue
+			}
 			return err
 		}
+	}
+	if exists == len(e.disks) {
+		return ErrBucketExists
 	}
 	return nil
 }
@@ -102,10 +114,18 @@ func (e *erasureObjects) ListBuckets(ctx context.Context) ([]BucketInfo, error) 
 func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	missing := 0
 	for _, d := range e.disks {
-		if err := d.DeleteBucket(bucket); err != nil && !os.IsNotExist(err) {
+		if err := d.DeleteBucket(bucket); err != nil {
+			if os.IsNotExist(err) {
+				missing++
+				continue
+			}
 			return err
 		}
+	}
+	if missing == len(e.disks) {
+		return ErrBucketNotFound
 	}
 	return nil
 }
@@ -266,48 +286,25 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 }
 
 func (e *erasureObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int, fetchOwner bool, startAfter string) (ListObjectsV2Info, error) {
-	names, err := e.disks[0].ListObjects(bucket, prefix)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+	objects, err := e.listObjectInfos(ctx, bucket, prefix)
+	if err != nil {
 		return ListObjectsV2Info{}, err
+	}
+	return buildListObjectsV2Result(objects, prefix, continuationToken, delimiter, maxKeys, startAfter), nil
+}
+
+func (e *erasureObjects) listObjectInfos(ctx context.Context, bucket, prefix string) ([]ObjectInfo, error) {
+	names, err := e.disks[0].ListObjects(bucket, prefix)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil, ErrBucketNotFound
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	sort.Strings(names)
-
-	start := startAfter
-	if continuationToken != "" {
-		start = continuationToken
-	}
-	if start != "" {
-		i := sort.SearchStrings(names, start)
-		if i < len(names) && names[i] == start {
-			i++
-		}
-		names = names[i:]
-	}
-
-	if maxKeys <= 0 || maxKeys > 1000 {
-		maxKeys = 1000
-	}
-
-	var objects []ObjectInfo
-	var prefixes []string
-	seen := map[string]bool{}
-
+	objects := make([]ObjectInfo, 0, len(names))
 	for _, name := range names {
-		if len(objects)+len(prefixes) >= maxKeys {
-			break
-		}
-		if delimiter != "" {
-			rel := strings.TrimPrefix(name, prefix)
-			if idx := strings.Index(rel, delimiter); idx >= 0 {
-				cp := prefix + rel[:idx+len(delimiter)]
-				if !seen[cp] {
-					seen[cp] = true
-					prefixes = append(prefixes, cp)
-				}
-				continue
-			}
-		}
 		meta, merr := e.readMeta(bucket, name)
 		if merr != nil {
 			continue
@@ -320,15 +317,56 @@ func (e *erasureObjects) ListObjectsV2(ctx context.Context, bucket, prefix, cont
 			ETag:    meta.ETag,
 		})
 	}
+	return objects, nil
+}
 
-	result := ListObjectsV2Info{Objects: objects, Prefixes: prefixes}
-	if len(objects)+len(prefixes) >= maxKeys && len(names) > maxKeys {
-		result.IsTruncated = true
-		if len(objects) > 0 {
-			result.NextContinuationToken = objects[len(objects)-1].Name
-		}
+func buildListObjectsV2Result(objects []ObjectInfo, prefix, continuationToken, delimiter string, maxKeys int, startAfter string) ListObjectsV2Info {
+	if maxKeys <= 0 || maxKeys > 1000 {
+		maxKeys = 1000
 	}
-	return result, nil
+
+	start := startAfter
+	if continuationToken != "" {
+		start = continuationToken
+	}
+	if start != "" {
+		i := sort.Search(len(objects), func(i int) bool {
+			return objects[i].Name >= start
+		})
+		if i < len(objects) && objects[i].Name == start {
+			i++
+		}
+		objects = objects[i:]
+	}
+
+	result := ListObjectsV2Info{}
+	prefixes := make([]string, 0)
+	seen := make(map[string]bool)
+
+	for i, object := range objects {
+		if len(result.Objects)+len(prefixes) >= maxKeys {
+			result.IsTruncated = true
+			if i > 0 {
+				result.NextContinuationToken = objects[i-1].Name
+			}
+			break
+		}
+		if delimiter != "" {
+			rel := strings.TrimPrefix(object.Name, prefix)
+			if idx := strings.Index(rel, delimiter); idx >= 0 {
+				cp := prefix + rel[:idx+len(delimiter)]
+				if !seen[cp] {
+					seen[cp] = true
+					prefixes = append(prefixes, cp)
+				}
+				continue
+			}
+		}
+		result.Objects = append(result.Objects, object)
+	}
+
+	result.Prefixes = prefixes
+	return result
 }
 
 func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
