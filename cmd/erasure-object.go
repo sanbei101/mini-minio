@@ -45,11 +45,7 @@ type erasureObjects struct {
 	mu           sync.RWMutex
 }
 
-// NewErasureObjects creates an ObjectLayer backed by the given disk paths.
-func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (ObjectLayer, error) {
-	if len(diskPaths) != dataBlocks+parityBlocks {
-		return nil, fmt.Errorf("need %d disk paths, got %d", dataBlocks+parityBlocks, len(diskPaths))
-	}
+func newErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (*erasureObjects, error) {
 	disks := make([]*storage.Disk, len(diskPaths))
 	for i, p := range diskPaths {
 		d, err := storage.NewDisk(p)
@@ -63,6 +59,15 @@ func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (Object
 		dataBlocks:   dataBlocks,
 		parityBlocks: parityBlocks,
 	}, nil
+}
+
+func (e *erasureObjects) listObjectNames(bucket, prefix string) ([]string, error) {
+	names, err := e.disks[0].ListObjects(bucket, prefix)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {

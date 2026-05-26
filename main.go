@@ -17,11 +17,12 @@ func main() {
 	dataDir := flag.String("data", "./data", "base data directory")
 	data := flag.Int("data-blocks", 4, "number of data blocks")
 	parity := flag.Int("parity-blocks", 2, "number of parity blocks")
+	sets := flag.Int("sets", 1, "number of erasure sets")
 	accessKey := flag.String("access-key", "", "S3 access key (empty = no auth)")
 	secretKey := flag.String("secret-key", "", "S3 secret key")
 	flag.Parse()
 
-	total := *data + *parity
+	total := (*data + *parity) * *sets
 	diskPaths := make([]string, total)
 	for i := range diskPaths {
 		diskPaths[i] = filepath.Join(*dataDir, fmt.Sprintf("disk%d", i))
