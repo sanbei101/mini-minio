@@ -61,11 +61,95 @@ func newErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (*erasu
 	}, nil
 }
 
-func (e *erasureObjects) listObjectNames(bucket, prefix string) ([]string, error) {
-	names, err := e.disks[0].ListObjects(bucket, prefix)
-	if err != nil {
-		return nil, err
+func (e *erasureObjects) statBucket(bucket string) (os.FileInfo, error) {
+	var firstErr error
+	for _, disk := range e.disks {
+		info, err := disk.StatBucket(bucket)
+		if err == nil {
+			return info, nil
+		}
+		if !errors.Is(err, storage.ErrNotFound) && firstErr == nil {
+			firstErr = err
+		}
 	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return nil, storage.ErrNotFound
+}
+
+func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
+	bucketByName := map[string]BucketInfo{}
+	var firstErr error
+	var okDisks int
+
+	for _, disk := range e.disks {
+		infos, err := disk.ListBuckets()
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		okDisks++
+		for _, info := range infos {
+			bucket := BucketInfo{
+				Name:    info.Name(),
+				Created: info.ModTime(),
+			}
+			existing, exists := bucketByName[bucket.Name]
+			if !exists || bucket.Created.Before(existing.Created) {
+				bucketByName[bucket.Name] = bucket
+			}
+		}
+	}
+	if okDisks == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+
+	buckets := make([]BucketInfo, 0, len(bucketByName))
+	for _, bucket := range bucketByName {
+		buckets = append(buckets, bucket)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].Name < buckets[j].Name
+	})
+	return buckets, nil
+}
+
+func (e *erasureObjects) listObjectNames(bucket, prefix string) ([]string, error) {
+	seen := map[string]bool{}
+	names := []string{}
+	var firstErr error
+	var foundBucket bool
+
+	for _, disk := range e.disks {
+		diskNames, err := disk.ListObjects(bucket, prefix)
+		if errors.Is(err, storage.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		foundBucket = true
+		for _, name := range diskNames {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	if !foundBucket {
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		return nil, storage.ErrNotFound
+	}
+
 	sort.Strings(names)
 	return names, nil
 }
@@ -82,7 +166,7 @@ func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {
 }
 
 func (e *erasureObjects) GetBucketInfo(ctx context.Context, bucket string) (BucketInfo, error) {
-	fi, err := e.disks[0].StatBucket(bucket)
+	fi, err := e.statBucket(bucket)
 	if errors.Is(err, storage.ErrNotFound) {
 		return BucketInfo{}, ErrBucketNotFound
 	}
@@ -93,15 +177,7 @@ func (e *erasureObjects) GetBucketInfo(ctx context.Context, bucket string) (Buck
 }
 
 func (e *erasureObjects) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
-	infos, err := e.disks[0].ListBuckets()
-	if err != nil {
-		return nil, err
-	}
-	buckets := make([]BucketInfo, len(infos))
-	for i, fi := range infos {
-		buckets[i] = BucketInfo{Name: fi.Name(), Created: fi.ModTime()}
-	}
-	return buckets, nil
+	return e.listBucketInfos()
 }
 
 func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error {
@@ -271,12 +347,13 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 }
 
 func (e *erasureObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int, fetchOwner bool, startAfter string) (ListObjectsV2Info, error) {
-	names, err := e.disks[0].ListObjects(bucket, prefix)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+	names, err := e.listObjectNames(bucket, prefix)
+	if errors.Is(err, storage.ErrNotFound) {
+		return ListObjectsV2Info{}, ErrBucketNotFound
+	}
+	if err != nil {
 		return ListObjectsV2Info{}, err
 	}
-
-	sort.Strings(names)
 
 	start := startAfter
 	if continuationToken != "" {
@@ -349,10 +426,7 @@ func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
 // GetOffsetLength resolves the range spec against the object size.
 func (rs *HTTPRangeSpec) GetOffsetLength(size int64) (int64, int64, error) {
 	if rs.IsSuffixLength {
-		start := size + rs.Start
-		if start < 0 {
-			start = 0
-		}
+		start := max(size+rs.Start, 0)
 		return start, size - start, nil
 	}
 	start := rs.Start

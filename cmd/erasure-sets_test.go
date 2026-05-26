@@ -71,6 +71,54 @@ func TestErasureSetsRouteAndListAcrossSets(t *testing.T) {
 	}
 }
 
+func TestErasureSetNamespaceDoesNotDependOnFirstDisk(t *testing.T) {
+	ctx := context.Background()
+	disks := make([]string, 6)
+	for i := range disks {
+		disks[i] = t.TempDir()
+	}
+
+	obj, err := cmd.NewErasureObjects(disks, 4, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := obj.MakeBucket(ctx, "bucket"); err != nil {
+		t.Fatal(err)
+	}
+
+	reader, err := cmd.NewPutObjReader(bytes.NewReader([]byte("data")), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = obj.PutObject(ctx, "bucket", "object", reader); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.RemoveAll(filepath.Join(disks[0], "bucket")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = obj.GetBucketInfo(ctx, "bucket"); err != nil {
+		t.Fatal(err)
+	}
+
+	buckets, err := obj.ListBuckets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(buckets) != 1 || buckets[0].Name != "bucket" {
+		t.Fatalf("unexpected buckets: %#v", buckets)
+	}
+
+	result, err := obj.ListObjectsV2(ctx, "bucket", "", "", "", 100, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Objects) != 1 || result.Objects[0].Name != "object" {
+		t.Fatalf("unexpected objects: %#v", result.Objects)
+	}
+}
+
 func countUsedSets(t *testing.T, disks []string, bucket string) int {
 	t.Helper()
 	var usedSets int

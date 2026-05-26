@@ -64,11 +64,55 @@ func (s *erasureSets) MakeBucket(ctx context.Context, bucket string) error {
 }
 
 func (s *erasureSets) GetBucketInfo(ctx context.Context, bucket string) (BucketInfo, error) {
-	return s.sets[0].GetBucketInfo(ctx, bucket)
+	var firstErr error
+	for _, set := range s.sets {
+		info, err := set.GetBucketInfo(ctx, bucket)
+		if err == nil {
+			return info, nil
+		}
+		if !errors.Is(err, ErrBucketNotFound) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return BucketInfo{}, firstErr
+	}
+	return BucketInfo{}, ErrBucketNotFound
 }
 
 func (s *erasureSets) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
-	return s.sets[0].ListBuckets(ctx)
+	bucketByName := map[string]BucketInfo{}
+	var firstErr error
+	var okSets int
+
+	for _, set := range s.sets {
+		buckets, err := set.ListBuckets(ctx)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		okSets++
+		for _, bucket := range buckets {
+			existing, exists := bucketByName[bucket.Name]
+			if !exists || bucket.Created.Before(existing.Created) {
+				bucketByName[bucket.Name] = bucket
+			}
+		}
+	}
+	if okSets == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+
+	buckets := make([]BucketInfo, 0, len(bucketByName))
+	for _, bucket := range bucketByName {
+		buckets = append(buckets, bucket)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].Name < buckets[j].Name
+	})
+	return buckets, nil
 }
 
 func (s *erasureSets) DeleteBucket(ctx context.Context, bucket string) error {
@@ -204,9 +248,6 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 }
 
 func (s *erasureSets) setForObject(bucket, object string) *erasureObjects {
-	if len(s.sets) == 1 {
-		return s.sets[0]
-	}
 	index := int(crc32.ChecksumIEEE([]byte(object)) % uint32(len(s.sets)))
 	return s.sets[index]
 }
