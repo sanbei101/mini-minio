@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sanbei101/mini-minio/internal/bpool"
+	"github.com/sanbei101/mini-minio/internal/erasure"
 	"github.com/sanbei101/mini-minio/internal/storage"
 )
 
@@ -23,6 +25,7 @@ type erasureSets struct {
 	setDriveCount int
 	dataBlocks    int
 	parityBlocks  int
+	bufferPool    *bpool.BytePoolCap
 }
 
 // NewErasureObjects creates an ObjectLayer backed by one or more erasure sets.
@@ -35,11 +38,15 @@ func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (Object
 		return nil, fmt.Errorf("need disk paths in groups of %d, got %d", setDriveCount, len(diskPaths))
 	}
 
+	// Create buffer pool: 1024 buffers of BlockSize, 4K-aligned.
+	pool := bpool.NewBytePoolCap(1024, erasure.BlockSize, erasure.BlockSize)
+	pool.Populate()
+
 	setCount := len(diskPaths) / setDriveCount
 	sets := make([]*erasureObjects, 0, setCount)
 	for i := range setCount {
 		start := i * setDriveCount
-		set, err := newErasureObjects(diskPaths[start:start+setDriveCount], dataBlocks, parityBlocks)
+		set, err := newErasureObjects(diskPaths[start:start+setDriveCount], dataBlocks, parityBlocks, pool)
 		if err != nil {
 			return nil, err
 		}
@@ -51,6 +58,7 @@ func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (Object
 		setDriveCount: setDriveCount,
 		dataBlocks:    dataBlocks,
 		parityBlocks:  parityBlocks,
+		bufferPool:    pool,
 	}, nil
 }
 

@@ -183,7 +183,7 @@ func BenchmarkErasureEncode(b *testing.B) {
 }
 
 func benchmarkErasureEncode(b *testing.B, dataBlocks, parityBlocks int) {
-	enc, err := erasure.New(dataBlocks, parityBlocks)
+	enc, err := erasure.New(dataBlocks, parityBlocks, nil)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func BenchmarkErasureDecode(b *testing.B) {
 }
 
 func benchmarkErasureDecode(b *testing.B, dataBlocks, parityBlocks int) {
-	enc, err := erasure.New(dataBlocks, parityBlocks)
+	enc, err := erasure.New(dataBlocks, parityBlocks, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

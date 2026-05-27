@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sanbei101/mini-minio/internal/bpool"
 	"github.com/sanbei101/mini-minio/internal/erasure"
 	"github.com/sanbei101/mini-minio/internal/storage"
 )
@@ -42,10 +43,11 @@ type erasureObjects struct {
 	disks        []*storage.Disk
 	dataBlocks   int
 	parityBlocks int
+	pool         *bpool.BytePoolCap
 	mu           sync.RWMutex
 }
 
-func newErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (*erasureObjects, error) {
+func newErasureObjects(diskPaths []string, dataBlocks, parityBlocks int, pool *bpool.BytePoolCap) (*erasureObjects, error) {
 	disks := make([]*storage.Disk, len(diskPaths))
 	for i, p := range diskPaths {
 		d, err := storage.NewDisk(p)
@@ -58,6 +60,7 @@ func newErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (*erasu
 		disks:        disks,
 		dataBlocks:   dataBlocks,
 		parityBlocks: parityBlocks,
+		pool:         pool,
 	}, nil
 }
 
@@ -79,27 +82,48 @@ func (e *erasureObjects) statBucket(bucket string) (os.FileInfo, error) {
 }
 
 func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
+	type result struct {
+		infos []BucketInfo
+		err   error
+	}
+	results := make([]result, len(e.disks))
+	var wg sync.WaitGroup
+	for i, disk := range e.disks {
+		wg.Add(1)
+		go func(idx int, d *storage.Disk) {
+			defer wg.Done()
+			infos, err := d.ListBuckets()
+			if err != nil {
+				results[idx] = result{err: err}
+				return
+			}
+			buckets := make([]BucketInfo, 0, len(infos))
+			for _, info := range infos {
+				buckets = append(buckets, BucketInfo{
+					Name:    info.Name(),
+					Created: info.ModTime(),
+				})
+			}
+			results[idx] = result{infos: buckets}
+		}(i, disk)
+	}
+	wg.Wait()
+
 	bucketByName := map[string]BucketInfo{}
 	var firstErr error
 	var okDisks int
-
-	for _, disk := range e.disks {
-		infos, err := disk.ListBuckets()
-		if err != nil {
+	for _, r := range results {
+		if r.err != nil {
 			if firstErr == nil {
-				firstErr = err
+				firstErr = r.err
 			}
 			continue
 		}
 		okDisks++
-		for _, info := range infos {
-			bucket := BucketInfo{
-				Name:    info.Name(),
-				Created: info.ModTime(),
-			}
-			existing, exists := bucketByName[bucket.Name]
-			if !exists || bucket.Created.Before(existing.Created) {
-				bucketByName[bucket.Name] = bucket
+		for _, b := range r.infos {
+			existing, exists := bucketByName[b.Name]
+			if !exists || b.Created.Before(existing.Created) {
+				bucketByName[b.Name] = b
 			}
 		}
 	}
@@ -108,8 +132,8 @@ func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 	}
 
 	buckets := make([]BucketInfo, 0, len(bucketByName))
-	for _, bucket := range bucketByName {
-		buckets = append(buckets, bucket)
+	for _, b := range bucketByName {
+		buckets = append(buckets, b)
 	}
 	sort.Slice(buckets, func(i, j int) bool {
 		return buckets[i].Name < buckets[j].Name
@@ -157,8 +181,22 @@ func (e *erasureObjects) listObjectNames(bucket, prefix string) ([]string, error
 func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, d := range e.disks {
-		if err := d.MakeBucket(bucket); err != nil && !errors.Is(err, storage.ErrBucketExists) {
+	errs := make([]error, len(e.disks))
+	var wg sync.WaitGroup
+	for i, d := range e.disks {
+		wg.Add(1)
+		go func(idx int, disk *storage.Disk) {
+			defer wg.Done()
+			err := disk.MakeBucket(bucket)
+			if errors.Is(err, storage.ErrBucketExists) {
+				err = nil
+			}
+			errs[idx] = err
+		}(i, d)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
 			return err
 		}
 	}
@@ -183,8 +221,22 @@ func (e *erasureObjects) ListBuckets(ctx context.Context) ([]BucketInfo, error) 
 func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, d := range e.disks {
-		if err := d.DeleteBucket(bucket); err != nil && !os.IsNotExist(err) {
+	var wg sync.WaitGroup
+	errs := make([]error, len(e.disks))
+	for i, d := range e.disks {
+		wg.Add(1)
+		go func(idx int, disk *storage.Disk) {
+			defer wg.Done()
+			err := disk.DeleteBucket(bucket)
+			if os.IsNotExist(err) {
+				err = nil
+			}
+			errs[idx] = err
+		}(i, d)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
 			return err
 		}
 	}
@@ -192,7 +244,7 @@ func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error 
 }
 
 func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, data *PutObjReader) (ObjectInfo, error) {
-	enc, err := erasure.New(e.dataBlocks, e.parityBlocks)
+	enc, err := erasure.New(e.dataBlocks, e.parityBlocks, e.pool)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
@@ -218,10 +270,20 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		writeQuorum++
 	}
 
+	// Get buffer from pool.
+	var buffer []byte
+	if e.pool != nil {
+		buffer = e.pool.Get()
+		defer e.pool.Put(buffer)
+	} else {
+		buffer = make([]byte, erasure.BlockSize)
+	}
+	buffer = buffer[:erasure.BlockSize]
+
 	md5h := md5.New()
 	tee := io.TeeReader(data, md5h)
 
-	n, encErr := enc.Encode(ctx, tee, writers, writeQuorum)
+	n, encErr := enc.Encode(ctx, tee, writers, buffer, writeQuorum)
 	for _, f := range files {
 		f.Close()
 	}
@@ -247,13 +309,56 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		Parts:        []ObjectPartInfo{{Number: 1, Size: enc.ShardFileSize(n), ActualSize: n}},
 	}
 
+	// Write-then-rename: write tmp files in parallel, then rename atomically.
+	tmpPaths := make([]string, len(e.disks))
+	var wg sync.WaitGroup
+	metaErrs := make([]error, len(e.disks))
 	for i, d := range e.disks {
-		m := meta
-		m.DiskIndex = i
-		if err := d.WriteMeta(bucket, object, &m); err != nil {
-			return ObjectInfo{}, err
+		wg.Add(1)
+		go func(idx int, disk *storage.Disk) {
+			defer wg.Done()
+			m := meta
+			m.DiskIndex = idx
+			tmp, err := disk.WriteMetaTmp(bucket, object, &m)
+			if err != nil {
+				metaErrs[idx] = err
+				return
+			}
+			tmpPaths[idx] = tmp
+		}(i, d)
+	}
+	wg.Wait()
+
+	writeOK := 0
+	for _, err := range metaErrs {
+		if err == nil {
+			writeOK++
 		}
 	}
+	if writeOK < writeQuorum {
+		// Cleanup tmp files.
+		for _, tmp := range tmpPaths {
+			if tmp != "" {
+				os.Remove(tmp)
+			}
+		}
+		return ObjectInfo{}, fmt.Errorf("metadata write quorum not met (%d/%d)", writeOK, writeQuorum)
+	}
+
+	// Rename tmp -> final in parallel.
+	var renameWg sync.WaitGroup
+	renameErrs := make([]error, len(e.disks))
+	for i, d := range e.disks {
+		if tmpPaths[i] == "" {
+			continue
+		}
+		renameWg.Add(1)
+		go func(idx int, disk *storage.Disk) {
+			defer renameWg.Done()
+			renameErrs[idx] = disk.RenameMeta(bucket, object)
+		}(i, d)
+	}
+	renameWg.Wait()
 
 	return ObjectInfo{
 		Bucket:      bucket,
@@ -286,7 +391,7 @@ func (e *erasureObjects) GetObjectNInfo(ctx context.Context, bucket, object stri
 		return nil, err
 	}
 
-	enc, err := erasure.New(meta.DataBlocks, meta.ParityBlocks)
+	enc, err := erasure.New(meta.DataBlocks, meta.ParityBlocks, e.pool)
 	if err != nil {
 		return nil, err
 	}
@@ -340,9 +445,16 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	var wg sync.WaitGroup
 	for _, d := range e.disks {
-		_ = d.DeleteObject(bucket, object)
+		wg.Add(1)
+		go func(disk *storage.Disk) {
+			defer wg.Done()
+			disk.DeleteObject(bucket, object)
+		}(d)
 	}
+	wg.Wait()
 	return info, nil
 }
 
@@ -413,14 +525,55 @@ func (e *erasureObjects) ListObjectsV2(ctx context.Context, bucket, prefix, cont
 	return result, nil
 }
 
+// readMeta reads xl.meta from all disks in parallel and picks the best via quorum.
 func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
-	var meta xlMeta
-	for _, d := range e.disks {
-		if err := d.ReadMeta(bucket, object, &meta); err == nil {
-			return &meta, nil
+	metas := make([]*xlMeta, len(e.disks))
+	errs := make([]error, len(e.disks))
+	var wg sync.WaitGroup
+	for i, d := range e.disks {
+		wg.Add(1)
+		go func(idx int, disk *storage.Disk) {
+			defer wg.Done()
+			var m xlMeta
+			if err := disk.ReadMeta(bucket, object, &m); err != nil {
+				errs[idx] = err
+				return
+			}
+			metas[idx] = &m
+		}(i, d)
+	}
+	wg.Wait()
+
+	// Quorum vote: pick the meta that appears most (by ETag + ModTime match).
+	type metaKey struct {
+		etag    string
+		modTime time.Time
+	}
+	counts := map[metaKey]int{}
+	bestMeta := metas[0]
+	for _, m := range metas {
+		if m == nil {
+			continue
+		}
+		k := metaKey{etag: m.ETag, modTime: m.ModTime}
+		counts[k]++
+	}
+
+	var bestCount int
+	for _, m := range metas {
+		if m == nil {
+			continue
+		}
+		k := metaKey{etag: m.ETag, modTime: m.ModTime}
+		if counts[k] > bestCount {
+			bestCount = counts[k]
+			bestMeta = m
 		}
 	}
-	return nil, ErrObjectNotFound
+	if bestMeta == nil {
+		return nil, ErrObjectNotFound
+	}
+	return bestMeta, nil
 }
 
 // GetOffsetLength resolves the range spec against the object size.

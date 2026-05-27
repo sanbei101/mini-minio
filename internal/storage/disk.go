@@ -104,6 +104,31 @@ func (d *Disk) WriteMeta(bucket, object string, meta any) error {
 	return os.WriteFile(filepath.Join(dir, metaFile), data, 0o644)
 }
 
+// WriteMetaTmp writes metadata to a temporary file. Returns the tmp path on success.
+func (d *Disk) WriteMetaTmp(bucket, object string, meta any) (string, error) {
+	dir := filepath.Join(d.path, bucket, object)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return "", err
+	}
+	tmp := filepath.Join(dir, metaFile+".tmp")
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return "", err
+	}
+	return tmp, nil
+}
+
+// RenameMeta atomically renames the temp metadata file to the final xl.meta.
+func (d *Disk) RenameMeta(bucket, object string) error {
+	dir := filepath.Join(d.path, bucket, object)
+	tmp := filepath.Join(dir, metaFile+".tmp")
+	dst := filepath.Join(dir, metaFile)
+	return os.Rename(tmp, dst)
+}
+
 func (d *Disk) ReadMeta(bucket, object string, out any) error {
 	data, err := os.ReadFile(filepath.Join(d.path, bucket, object, metaFile))
 	if os.IsNotExist(err) {
