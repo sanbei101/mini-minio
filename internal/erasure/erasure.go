@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/klauspost/reedsolomon"
+	"github.com/phuslu/log"
 
 	"github.com/sanbei101/mini-minio/internal/bpool"
 )
@@ -34,8 +35,10 @@ func New(dataBlocks, parityBlocks int, pool *bpool.BytePoolCap) (Erasure, error)
 	var once sync.Once
 	e.encoder = func() reedsolomon.Encoder {
 		once.Do(func() {
-			enc, _ = reedsolomon.New(dataBlocks, parityBlocks,
+			var err error
+			enc, err = reedsolomon.New(dataBlocks, parityBlocks,
 				reedsolomon.WithAutoGoroutines(int(e.ShardSize())))
+			log.Panic().Err(err).Msg("failed to create reedsolomon encoder")
 		})
 		return enc
 	}

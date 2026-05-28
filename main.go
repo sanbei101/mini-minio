@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/phuslu/log"
+
 	"github.com/sanbei101/mini-minio/cmd"
 )
 

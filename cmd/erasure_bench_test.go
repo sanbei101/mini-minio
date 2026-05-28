@@ -99,7 +99,7 @@ func BenchmarkGetObject(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		_, _ = io.ReadAll(r.Reader)
+		io.ReadAll(r.Reader)
 		r.Close()
 	}
 }
@@ -168,7 +168,7 @@ func benchmarkGetObjectParallel(b *testing.B, dataBlocks, parityBlocks int) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			_, _ = io.ReadAll(r.Reader)
+			io.ReadAll(r.Reader)
 			r.Close()
 			counter++
 		}

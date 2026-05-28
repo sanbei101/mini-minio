@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/phuslu/log"
 )
 
 type apiHandlers struct {
@@ -247,7 +248,11 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Last-Modified", info.ModTime.UTC().Format(http.TimeFormat))
 
 	if rs != nil {
-		offset, length, _ := rs.GetOffsetLength(info.Size)
+		offset, length, err := rs.GetOffsetLength(info.Size)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "InvalidRange", err.Error())
+			return
+		}
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, offset+length-1, info.Size))
 		w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
 		w.WriteHeader(http.StatusPartialContent)
@@ -255,7 +260,24 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
 		w.WriteHeader(http.StatusOK)
 	}
-	_, _ = io.Copy(w, objReader)
+	written, err := io.Copy(w, objReader)
+	if err != nil {
+		if r.Context().Err() != nil {
+			log.Warn().
+				Str("bucket", bucket).
+				Str("object", object).
+				Err(err).
+				Msg("GetObject: Client disconnected mid-download")
+		} else {
+			log.Error().
+				Str("bucket", bucket).
+				Str("object", object).
+				Int64("written", written).
+				Err(err).
+				Msg("GetObject: Failed to write response")
+		}
+		return
+	}
 }
 
 func (a *apiHandlers) HeadObject(w http.ResponseWriter, r *http.Request) {
@@ -379,12 +401,17 @@ func PresignPutObject(baseURL, bucket, object, accessKey, secretKey string, expi
 }
 
 // --- Helpers ---
-
 func writeXML(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(xml.Header))
-	_ = xml.NewEncoder(w).Encode(v)
+	if _, err := w.Write([]byte(xml.Header)); err != nil {
+		log.Error().Err(err).Msg("Failed to write XML header")
+		return
+	}
+	if err := xml.NewEncoder(w).Encode(v); err != nil {
+		log.Error().Err(err).Msg("Failed to write XML response")
+		return
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

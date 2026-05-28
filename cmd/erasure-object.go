@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/phuslu/log"
 
 	"github.com/sanbei101/mini-minio/internal/bpool"
 	"github.com/sanbei101/mini-minio/internal/erasure"
@@ -451,18 +452,58 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 	if err != nil {
 		return ObjectInfo{}, err
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
 
+	e.mu.Lock()
+	disks := e.disks
+	e.mu.Unlock()
+
+	errs := make([]error, len(disks))
 	var wg sync.WaitGroup
-	for _, d := range e.disks {
+	for i, d := range disks {
 		wg.Add(1)
-		go func(disk *storage.Disk) {
+		go func(idx int, disk *storage.Disk) {
 			defer wg.Done()
-			_ = disk.DeleteObject(bucket, object)
-		}(d)
+
+			if ctx.Err() != nil {
+				errs[idx] = ctx.Err()
+				return
+			}
+			errs[idx] = disk.DeleteObject(bucket, object)
+		}(i, d)
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ObjectInfo{}, ctx.Err()
+	case <-done:
+	}
+
+	var failCount int
+	for index, err := range errs {
+		if err != nil {
+			failCount++
+			// 记录下哪些盘失败了
+			log.Error().
+				Err(err).
+				Str("bucket", bucket).
+				Str("object", object).
+				Int("diskIndex", index).
+				Msg("disk delete failed")
+			continue
+		}
+	}
+	writeQuorum := len(disks)/2 + 1
+	successCount := len(disks) - failCount
+
+	if successCount < writeQuorum {
+		return ObjectInfo{}, fmt.Errorf("delete failed: only %d/%d disks succeeded", successCount, len(disks))
+	}
+
 	return info, nil
 }
 
