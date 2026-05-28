@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -50,10 +52,24 @@ func signRequest(t *testing.T, req *http.Request, accessKey, secretKey string) {
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 	canonHdr := fmt.Sprintf("host:%s\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:%s\n", req.Host, dateStr)
 
+	q := req.URL.Query()
+	qKeys := make([]string, 0, len(q))
+	for k := range q {
+		qKeys = append(qKeys, k)
+	}
+	sort.Strings(qKeys)
+	var qParts []string
+	for _, k := range qKeys {
+		for _, v := range q[k] {
+			qParts = append(qParts, url.QueryEscape(k)+"="+url.QueryEscape(v))
+		}
+	}
+	canonQuery := strings.Join(qParts, "&")
+
 	canonReq := strings.Join([]string{
 		req.Method,
 		req.URL.EscapedPath(),
-		req.URL.RawQuery,
+		canonQuery,
 		canonHdr,
 		signedHeaders,
 		"UNSIGNED-PAYLOAD",
@@ -149,5 +165,80 @@ func TestPresignedURLs(t *testing.T) {
 	}
 	if string(body) != "presigned content" {
 		t.Fatalf("body mismatch: %q", body)
+	}
+}
+
+func TestListObjectsDelimiter(t *testing.T) {
+	srv, ak, sk := setup(t)
+	client := srv.Client()
+
+	do := func(method, target string, body io.Reader) (int, []byte) {
+		req, err := http.NewRequest(method, srv.URL+target, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signRequest(t, req, ak, sk)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, respBody
+	}
+
+	// Create bucket
+	if code, _ := do(http.MethodPut, "/testdir", nil); code != http.StatusOK {
+		t.Fatalf("create bucket: %d", code)
+	}
+
+	// Upload objects: some with "/" in name, some without
+	objects := []string{"readme.txt", "a/b.txt", "a/c.txt", "a/x/y.txt"}
+	for _, obj := range objects {
+		code, _ := do(http.MethodPut, "/testdir/"+obj, strings.NewReader("content of "+obj))
+		if code != http.StatusOK {
+			t.Fatalf("PUT %s: %d", obj, code)
+		}
+	}
+
+	// List with no delimiter — should return all objects recursively
+	code, body := do(http.MethodGet, "/testdir?prefix=&delimiter=", nil)
+	if code != http.StatusOK {
+		t.Fatalf("list no delimiter: %d", code)
+	}
+	bodyStr := string(body)
+	for _, obj := range objects {
+		if !strings.Contains(bodyStr, "<Key>"+obj+"</Key>") {
+			t.Errorf("no delimiter: missing %q in response", obj)
+		}
+	}
+
+	// List with delimiter="/" — should return "readme.txt" as object, "a/" as prefix
+	code, body = do(http.MethodGet, "/testdir?delimiter=/", nil)
+	if code != http.StatusOK {
+		t.Fatalf("list delimiter=/ : %d", code)
+	}
+	bodyStr = string(body)
+	if !strings.Contains(bodyStr, "<Key>readme.txt</Key>") {
+		t.Errorf("delimiter=/: missing readme.txt")
+	}
+	if !strings.Contains(bodyStr, "<Prefix>a/</Prefix>") {
+		t.Errorf("delimiter=/: missing prefix a/")
+	}
+
+	// List with prefix="a/" and delimiter="/" — should return "a/b.txt", "a/c.txt" as objects, "a/x/" as prefix
+	code, body = do(http.MethodGet, "/testdir?prefix=a/&delimiter=/", nil)
+	if code != http.StatusOK {
+		t.Fatalf("list prefix=a/ delimiter=/ : %d", code)
+	}
+	bodyStr = string(body)
+	if !strings.Contains(bodyStr, "<Key>a/b.txt</Key>") {
+		t.Errorf("prefix=a/ delimiter=/: missing a/b.txt")
+	}
+	if !strings.Contains(bodyStr, "<Key>a/c.txt</Key>") {
+		t.Errorf("prefix=a/ delimiter=/: missing a/c.txt")
+	}
+	if !strings.Contains(bodyStr, "<Prefix>a/x/</Prefix>") {
+		t.Errorf("prefix=a/ delimiter=/: missing prefix a/x/")
 	}
 }

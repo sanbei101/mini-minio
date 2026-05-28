@@ -38,7 +38,9 @@ func New(dataBlocks, parityBlocks int, pool *bpool.BytePoolCap) (Erasure, error)
 			var err error
 			enc, err = reedsolomon.New(dataBlocks, parityBlocks,
 				reedsolomon.WithAutoGoroutines(int(e.ShardSize())))
-			log.Panic().Err(err).Msg("failed to create reedsolomon encoder")
+			if err != nil {
+				log.Panic().Err(err).Msg("failed to create reedsolomon encoder")
+			}
 		})
 		return enc
 	}
