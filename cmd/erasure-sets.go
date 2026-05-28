@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"net/http"
 	"sort"
 	"strings"
 
@@ -136,11 +135,8 @@ func (s *erasureSets) ListObjectsV2(
 	ctx context.Context,
 	bucket, prefix, continuationToken, delimiter string,
 	maxKeys int,
-	fetchOwner bool,
 	startAfter string,
 ) (ListObjectsV2Info, error) {
-	_ = fetchOwner
-
 	names, err := s.listObjectNames(bucket, prefix)
 	if err != nil {
 		return ListObjectsV2Info{}, err
@@ -187,7 +183,7 @@ func (s *erasureSets) ListObjectsV2(
 			}
 		}
 
-		meta, err := s.setForObject(bucket, name).readMeta(bucket, name)
+		meta, err := s.setForObject(name).readMeta(bucket, name)
 		if err != nil {
 			continue
 		}
@@ -208,21 +204,20 @@ func (s *erasureSets) GetObjectNInfo(
 	ctx context.Context,
 	bucket, object string,
 	rs *HTTPRangeSpec,
-	h http.Header,
 ) (*GetObjectReader, error) {
-	return s.setForObject(bucket, object).GetObjectNInfo(ctx, bucket, object, rs, h)
+	return s.setForObject(object).GetObjectNInfo(ctx, bucket, object, rs)
 }
 
 func (s *erasureSets) GetObjectInfo(ctx context.Context, bucket, object string) (ObjectInfo, error) {
-	return s.setForObject(bucket, object).GetObjectInfo(ctx, bucket, object)
+	return s.setForObject(object).GetObjectInfo(ctx, bucket, object)
 }
 
 func (s *erasureSets) PutObject(ctx context.Context, bucket, object string, data *PutObjReader) (ObjectInfo, error) {
-	return s.setForObject(bucket, object).PutObject(ctx, bucket, object, data)
+	return s.setForObject(object).PutObject(ctx, bucket, object, data)
 }
 
 func (s *erasureSets) DeleteObject(ctx context.Context, bucket, object string) (ObjectInfo, error) {
-	return s.setForObject(bucket, object).DeleteObject(ctx, bucket, object)
+	return s.setForObject(object).DeleteObject(ctx, bucket, object)
 }
 
 func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
@@ -255,7 +250,7 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 	return names, nil
 }
 
-func (s *erasureSets) setForObject(bucket, object string) *erasureObjects {
+func (s *erasureSets) setForObject(object string) *erasureObjects {
 	index := int(crc32.ChecksumIEEE([]byte(object)) % uint32(len(s.sets)))
 	return s.sets[index]
 }

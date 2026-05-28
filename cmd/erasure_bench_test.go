@@ -95,7 +95,7 @@ func BenchmarkGetObject(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		r, err := obj.GetObjectNInfo(ctx, "bench-bucket", "test-object", nil, nil)
+		r, err := obj.GetObjectNInfo(ctx, "bench-bucket", "test-object", nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -164,7 +164,7 @@ func benchmarkGetObjectParallel(b *testing.B, dataBlocks, parityBlocks int) {
 	b.RunParallel(func(pb *testing.PB) {
 		counter := 0
 		for pb.Next() {
-			r, err := obj.GetObjectNInfo(ctx, "bench-bucket", "test-"+itoa(counter%10), nil, nil)
+			r, err := obj.GetObjectNInfo(ctx, "bench-bucket", "test-"+itoa(counter%10), nil)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -261,7 +261,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		_, err := obj.ListObjectsV2(ctx, "bench-bucket", "", "", "", 100, false, "")
+		_, err := obj.ListObjectsV2(ctx, "bench-bucket", "", "", "", 100, "")
 		if err != nil {
 			b.Fatal(err)
 		}

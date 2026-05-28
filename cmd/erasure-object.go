@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -394,7 +393,6 @@ func (e *erasureObjects) GetObjectNInfo(
 	ctx context.Context,
 	bucket, object string,
 	rs *HTTPRangeSpec,
-	h http.Header,
 ) (*GetObjectReader, error) {
 	meta, err := e.readMeta(bucket, object)
 	if err != nil {
@@ -461,7 +459,7 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 		wg.Add(1)
 		go func(disk *storage.Disk) {
 			defer wg.Done()
-			disk.DeleteObject(bucket, object)
+			_ = disk.DeleteObject(bucket, object)
 		}(d)
 	}
 	wg.Wait()
@@ -472,7 +470,6 @@ func (e *erasureObjects) ListObjectsV2(
 	ctx context.Context,
 	bucket, prefix, continuationToken, delimiter string,
 	maxKeys int,
-	fetchOwner bool,
 	startAfter string,
 ) (ListObjectsV2Info, error) {
 	names, err := e.listObjectNames(bucket, prefix)

@@ -60,14 +60,15 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 func authMiddleware(creds Credentials, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error
-		if r.URL.Query().Get("X-Amz-Signature") != "" {
+		switch {
+		case r.URL.Query().Get("X-Amz-Signature") != "":
 			// Presigned request
 			if err = r.ParseForm(); err == nil {
 				err = verifyPresignedAuth(r, creds)
 			}
-		} else if r.Header.Get("Authorization") != "" {
+		case r.Header.Get("Authorization") != "":
 			err = verifyHeaderAuth(r, creds)
-		} else {
+		default:
 			err = errors.New("missing authentication")
 		}
 		if err != nil {
@@ -143,7 +144,7 @@ func (a *apiHandlers) ListObjects(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := a.obj.ListObjectsV2(r.Context(), bucket, prefix, contToken, delimiter, maxKeys, false, startAfter)
+	result, err := a.obj.ListObjectsV2(r.Context(), bucket, prefix, contToken, delimiter, maxKeys, startAfter)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "NoSuchBucket", err.Error())
 		return
@@ -171,7 +172,8 @@ func (a *apiHandlers) ListObjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var contents []content
-	for _, o := range result.Objects {
+	for i := range result.Objects {
+		o := &result.Objects[i]
 		contents = append(contents, content{
 			Key:          o.Name,
 			LastModified: o.ModTime.Format(time.RFC3339),
@@ -232,7 +234,7 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	objReader, err := a.obj.GetObjectNInfo(r.Context(), bucket, object, rs, r.Header)
+	objReader, err := a.obj.GetObjectNInfo(r.Context(), bucket, object, rs)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "NoSuchKey", err.Error())
 		return
@@ -253,7 +255,7 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
 		w.WriteHeader(http.StatusOK)
 	}
-	io.Copy(w, objReader)
+	_, _ = io.Copy(w, objReader)
 }
 
 func (a *apiHandlers) HeadObject(w http.ResponseWriter, r *http.Request) {
@@ -383,8 +385,8 @@ func PresignPutObject(baseURL, bucket, object, accessKey, secretKey string, expi
 func writeXML(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
-	w.Write([]byte(xml.Header))
-	xml.NewEncoder(w).Encode(v)
+	_, _ = w.Write([]byte(xml.Header))
+	_ = xml.NewEncoder(w).Encode(v)
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

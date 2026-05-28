@@ -49,7 +49,7 @@ func TestErasureSetsRouteAndListAcrossSets(t *testing.T) {
 		t.Fatal("objects were not distributed to both sets")
 	}
 
-	result, err := obj.ListObjectsV2(ctx, "bucket", "", "", "", 100, false, "")
+	result, err := obj.ListObjectsV2(ctx, "bucket", "", "", "", 100, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestErasureSetsRouteAndListAcrossSets(t *testing.T) {
 		t.Fatalf("want %d objects, got %d", len(objects), len(result.Objects))
 	}
 
-	reader, err := obj.GetObjectNInfo(ctx, "bucket", "object-000", nil, nil)
+	reader, err := obj.GetObjectNInfo(ctx, "bucket", "object-000", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestErasureSetNamespaceDoesNotDependOnFirstDisk(t *testing.T) {
 		t.Fatalf("unexpected buckets: %#v", buckets)
 	}
 
-	result, err := obj.ListObjectsV2(ctx, "bucket", "", "", "", 100, false, "")
+	result, err := obj.ListObjectsV2(ctx, "bucket", "", "", "", 100, "")
 	if err != nil {
 		t.Fatal(err)
 	}

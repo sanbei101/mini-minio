@@ -29,10 +29,8 @@ func (e SHA256Mismatch) Error() string { return "SHA256 mismatch" }
 // are not empty then it will check whether the computed
 // match the reference values.
 type Reader struct {
-	src         io.Reader
-	bytesRead   int64
-	expectedMin int64
-	expectedMax int64
+	src       io.Reader
+	bytesRead int64
 
 	size       int64
 	actualSize int64

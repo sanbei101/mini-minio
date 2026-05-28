@@ -126,7 +126,7 @@ func verifyHeaderAuth(r *http.Request, creds Credentials) error {
 	hdr := make(http.Header)
 	for _, k := range signedHeaders {
 		if k == "host" {
-			hdr.Set("host", r.Host)
+			hdr.Set("Host", r.Host)
 		} else {
 			hdr[http.CanonicalHeaderKey(k)] = r.Header[http.CanonicalHeaderKey(k)]
 		}
@@ -189,7 +189,7 @@ func verifyPresignedAuth(r *http.Request, creds Credentials) error {
 	hdr := make(http.Header)
 	for _, k := range signedHeaders {
 		if k == "host" {
-			hdr.Set("host", r.Host)
+			hdr.Set("Host", r.Host)
 		} else {
 			hdr[http.CanonicalHeaderKey(k)] = r.Header[http.CanonicalHeaderKey(k)]
 		}
