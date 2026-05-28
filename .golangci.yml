@@ -13,7 +13,6 @@ linters:
     - modernize
     - revive
     - bodyclose
-    - whitespace
   settings:
     gocritic:
       enabled-tags:
@@ -28,7 +27,6 @@ linters:
       rules:
         - name: unused-parameter
   exclusions:
-    warn-unused: true
     paths:
       - "copy"
     presets:
@@ -56,6 +54,5 @@ formatters:
       max-len: 120
       shorten-comments: true
   exclusions:
-    warn-unused: true
     paths:
       - "copy"
