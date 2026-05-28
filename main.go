@@ -3,12 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"github.com/phuslu/log"
 	"github.com/sanbei101/mini-minio/cmd"
 )
 
@@ -21,24 +20,28 @@ func main() {
 	accessKey := flag.String("access-key", "", "S3 access key (empty = no auth)")
 	secretKey := flag.String("secret-key", "", "S3 secret key")
 	flag.Parse()
-
+	log.DefaultLogger = log.Logger{
+		Level:  log.InfoLevel,
+		Caller: 0,
+		Writer: &log.IOWriter{Writer: os.Stderr},
+	}
 	total := (*data + *parity) * *sets
 	diskPaths := make([]string, total)
 	for i := range diskPaths {
 		diskPaths[i] = filepath.Join(*dataDir, fmt.Sprintf("disk%d", i))
 		if err := os.MkdirAll(diskPaths[i], 0o755); err != nil {
-			log.Fatal(err)
+			log.Fatal().Err(err)
 		}
 	}
 
-	log.Printf("disks: %s", strings.Join(diskPaths, ", "))
+	log.Info().Strs("disks", diskPaths).Msg("initialized disks")
 
 	obj, err := cmd.NewErasureObjects(diskPaths, *data, *parity)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 
 	router := cmd.NewRouter(obj, cmd.Credentials{AccessKey: *accessKey, SecretKey: *secretKey})
-	log.Printf("mini-minio listening on %s", *addr)
-	log.Fatal(http.ListenAndServe(*addr, router))
+	log.Info().Str("addr", *addr).Msg("starting server")
+	log.Fatal().Err(http.ListenAndServe(*addr, router))
 }

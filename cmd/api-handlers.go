@@ -302,14 +302,12 @@ func (a *apiHandlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Reque
 }
 
 func (a *apiHandlers) UploadPart(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
 	uploadID := r.URL.Query().Get("uploadId")
 	partNumber, err := strconv.Atoi(r.URL.Query().Get("partNumber"))
 	if err != nil || partNumber < 1 {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
 		return
 	}
-	_ = vars
 
 	etag, err := uploadPart(uploadID, partNumber, r.Body)
 	if err != nil {
