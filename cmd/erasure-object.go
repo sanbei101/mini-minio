@@ -468,6 +468,10 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 				errs[idx] = ctx.Err()
 				return
 			}
+			if disk == nil {
+				errs[idx] = errors.New("disk not found")
+				return
+			}
 			errs[idx] = disk.DeleteObject(bucket, object)
 		}(i, d)
 	}
