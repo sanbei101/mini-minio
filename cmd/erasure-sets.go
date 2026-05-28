@@ -32,7 +32,7 @@ type erasureSets struct {
 func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (ObjectLayer, error) {
 	setDriveCount := dataBlocks + parityBlocks
 	if dataBlocks <= 0 || parityBlocks <= 0 {
-		return nil, fmt.Errorf("data and parity blocks must be positive")
+		return nil, errors.New("data and parity blocks must be positive")
 	}
 	if len(diskPaths) == 0 || len(diskPaths)%setDriveCount != 0 {
 		return nil, fmt.Errorf("need disk paths in groups of %d, got %d", setDriveCount, len(diskPaths))

@@ -5,10 +5,11 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -97,7 +98,7 @@ func canonicalHeaders(h http.Header, signed []string) (canonical, signedStr stri
 func verifyHeaderAuth(r *http.Request, creds Credentials) error {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, signV4Algorithm+" ") {
-		return fmt.Errorf("missing or unsupported Authorization header")
+		return errors.New("missing or unsupported Authorization header")
 	}
 	// Parse: AWS4-HMAC-SHA256 Credential=..., SignedHeaders=..., Signature=...
 	// Clients may use ", " or "," as separator.
@@ -106,19 +107,19 @@ func verifyHeaderAuth(r *http.Request, creds Credentials) error {
 	signedHeadersStr := extractAuthField(rest, "SignedHeaders")
 	signature := extractAuthField(rest, "Signature")
 	if credStr == "" || signedHeadersStr == "" || signature == "" {
-		return fmt.Errorf("malformed Authorization header")
+		return errors.New("malformed Authorization header")
 	}
 
 	credParts := strings.Split(credStr, "/")
 	if len(credParts) < 5 {
-		return fmt.Errorf("malformed Credential")
+		return errors.New("malformed Credential")
 	}
 	if credParts[0] != creds.AccessKey {
-		return fmt.Errorf("unknown access key")
+		return errors.New("unknown access key")
 	}
 	t, err := time.Parse(iso8601Format, r.Header.Get("X-Amz-Date"))
 	if err != nil {
-		return fmt.Errorf("invalid X-Amz-Date")
+		return errors.New("invalid X-Amz-Date")
 	}
 
 	signedHeaders := strings.Split(signedHeadersStr, ";")
@@ -155,7 +156,7 @@ func verifyHeaderAuth(r *http.Request, creds Credentials) error {
 	expected := hex.EncodeToString(hmacSHA256(key, []byte(stringToSign)))
 
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(signature)) != 1 {
-		return fmt.Errorf("signature mismatch")
+		return errors.New("signature mismatch")
 	}
 	return nil
 }
@@ -165,23 +166,23 @@ func verifyPresignedAuth(r *http.Request, creds Credentials) error {
 	q := r.URL.Query()
 
 	if q.Get("X-Amz-Algorithm") != signV4Algorithm {
-		return fmt.Errorf("unsupported algorithm")
+		return errors.New("unsupported algorithm")
 	}
 	credStr := q.Get("X-Amz-Credential")
 	credParts := strings.Split(credStr, "/")
 	if len(credParts) < 5 || credParts[0] != creds.AccessKey {
-		return fmt.Errorf("unknown access key")
+		return errors.New("unknown access key")
 	}
 	t, err := time.Parse(iso8601Format, q.Get("X-Amz-Date"))
 	if err != nil {
-		return fmt.Errorf("invalid X-Amz-Date")
+		return errors.New("invalid X-Amz-Date")
 	}
 	expires, err := time.ParseDuration(q.Get("X-Amz-Expires") + "s")
 	if err != nil {
-		return fmt.Errorf("invalid X-Amz-Expires")
+		return errors.New("invalid X-Amz-Expires")
 	}
 	if time.Since(t) > expires {
-		return fmt.Errorf("presigned URL expired")
+		return errors.New("presigned URL expired")
 	}
 
 	signedHeaders := strings.Split(q.Get("X-Amz-SignedHeaders"), ";")
@@ -214,7 +215,7 @@ func verifyPresignedAuth(r *http.Request, creds Credentials) error {
 	signature := q.Get("X-Amz-Signature")
 
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(signature)) != 1 {
-		return fmt.Errorf("signature mismatch")
+		return errors.New("signature mismatch")
 	}
 	return nil
 }
@@ -228,7 +229,7 @@ func PresignURL(baseURL, method, bucket, object, accessKey, secretKey string, ex
 	q.Set("X-Amz-Algorithm", signV4Algorithm)
 	q.Set("X-Amz-Credential", accessKey+"/"+scope(t))
 	q.Set("X-Amz-Date", t.Format(iso8601Format))
-	q.Set("X-Amz-Expires", fmt.Sprintf("%d", int(expiry.Seconds())))
+	q.Set("X-Amz-Expires", strconv.Itoa(int(expiry.Seconds())))
 	q.Set("X-Amz-SignedHeaders", "host")
 
 	path := "/" + bucket + "/" + object
@@ -262,8 +263,8 @@ func extractAuthField(s, field string) string {
 	prefix := field + "="
 	for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' }) {
 		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, prefix) {
-			return strings.TrimPrefix(part, prefix)
+		if after, ok := strings.CutPrefix(part, prefix); ok {
+			return after
 		}
 	}
 	return ""

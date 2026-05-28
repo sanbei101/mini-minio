@@ -364,10 +364,7 @@ func (e *Erasure) Decode(
 
 		// Reconstruct original block from data shards.
 		blockStart := block * e.blockSize
-		blockEnd := blockStart + e.blockSize
-		if blockEnd > totalLength {
-			blockEnd = totalLength
-		}
+		blockEnd := min(blockStart+e.blockSize, totalLength)
 		blockLen := blockEnd - blockStart
 
 		var decoded []byte
@@ -379,14 +376,8 @@ func (e *Erasure) Decode(
 		}
 
 		// Trim to requested range within this block.
-		dataStart := offset - blockStart
-		if dataStart < 0 {
-			dataStart = 0
-		}
-		dataEnd := offset + length - blockStart
-		if dataEnd > int64(len(decoded)) {
-			dataEnd = int64(len(decoded))
-		}
+		dataStart := max(offset-blockStart, 0)
+		dataEnd := min(offset+length-blockStart, int64(len(decoded)))
 		if block > startBlock {
 			dataStart = 0
 		}

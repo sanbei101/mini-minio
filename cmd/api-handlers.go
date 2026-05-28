@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,7 +68,7 @@ func authMiddleware(creds Credentials, next http.Handler) http.Handler {
 		} else if r.Header.Get("Authorization") != "" {
 			err = verifyHeaderAuth(r, creds)
 		} else {
-			err = fmt.Errorf("missing authentication")
+			err = errors.New("missing authentication")
 		}
 		if err != nil {
 			writeError(w, http.StatusForbidden, "AccessDenied", err.Error())

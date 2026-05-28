@@ -261,7 +261,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 	for i, d := range e.disks {
 		f, ferr := d.CreateShardFile(bucket, object, dataDir, 1)
 		if ferr != nil {
-			for j := 0; j < i; j++ {
+			for j := range i {
 				files[j].Close()
 			}
 			return ObjectInfo{}, ferr
@@ -604,7 +604,7 @@ func (rs *HTTPRangeSpec) GetOffsetLength(size int64) (int64, int64, error) {
 		end = size - 1
 	}
 	if start > end {
-		return 0, 0, fmt.Errorf("invalid range")
+		return 0, 0, errors.New("invalid range")
 	}
 	return start, end - start + 1, nil
 }
