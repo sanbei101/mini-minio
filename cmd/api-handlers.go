@@ -30,9 +30,18 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 
 	// Multipart
 	r.Methods("POST").Path("/{bucket}/{object:.+}").Queries("uploads", "").HandlerFunc(api.CreateMultipartUpload)
-	r.Methods("PUT").Path("/{bucket}/{object:.+}").Queries("partNumber", "{partNumber}", "uploadId", "{uploadId}").HandlerFunc(api.UploadPart)
-	r.Methods("POST").Path("/{bucket}/{object:.+}").Queries("uploadId", "{uploadId}").HandlerFunc(api.CompleteMultipartUpload)
-	r.Methods("DELETE").Path("/{bucket}/{object:.+}").Queries("uploadId", "{uploadId}").HandlerFunc(api.AbortMultipartUpload)
+	r.Methods("PUT").
+		Path("/{bucket}/{object:.+}").
+		Queries("partNumber", "{partNumber}", "uploadId", "{uploadId}").
+		HandlerFunc(api.UploadPart)
+	r.Methods("POST").
+		Path("/{bucket}/{object:.+}").
+		Queries("uploadId", "{uploadId}").
+		HandlerFunc(api.CompleteMultipartUpload)
+	r.Methods("DELETE").
+		Path("/{bucket}/{object:.+}").
+		Queries("uploadId", "{uploadId}").
+		HandlerFunc(api.AbortMultipartUpload)
 
 	// Object-level
 	r.Methods("PUT").Path("/{bucket}/{object:.+}").HandlerFunc(api.PutObject)

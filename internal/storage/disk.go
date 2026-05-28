@@ -11,7 +11,7 @@ import (
 const metaFile = "xl.meta"
 
 var (
-	ErrNotFound   = errors.New("not found")
+	ErrNotFound     = errors.New("not found")
 	ErrBucketExists = errors.New("bucket already exists")
 )
 

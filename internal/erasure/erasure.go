@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/klauspost/reedsolomon"
+
 	"github.com/sanbei101/mini-minio/internal/bpool"
 )
 
@@ -121,7 +122,13 @@ func (mw *multiWriter) Write(blocks [][]byte) error {
 
 // Encode reads from src, erasure-encodes each block, and writes shards to writers.
 // buf is an externally-provided buffer (from pool) sized to BlockSize.
-func (e *Erasure) Encode(ctx context.Context, src io.Reader, writers []io.Writer, buf []byte, quorum int) (int64, error) {
+func (e *Erasure) Encode(
+	ctx context.Context,
+	src io.Reader,
+	writers []io.Writer,
+	buf []byte,
+	quorum int,
+) (int64, error) {
 	mw := &multiWriter{
 		writers:     writers,
 		writeQuorum: quorum,
@@ -174,7 +181,12 @@ type parallelReader struct {
 
 // newParallelReader creates a parallelReader. If pool is non-nil and large enough,
 // it grabs a single buffer from the pool and slices it into per-shard buffers.
-func newParallelReader(readers []io.ReaderAt, e *Erasure, offset, totalLength int64, pool *bpool.BytePoolCap) *parallelReader {
+func newParallelReader(
+	readers []io.ReaderAt,
+	e *Erasure,
+	offset, totalLength int64,
+	pool *bpool.BytePoolCap,
+) *parallelReader {
 	n := len(readers)
 	r2b := make([]int, n)
 	for i := range r2b {
@@ -322,7 +334,12 @@ func (p *parallelReader) Read(dst [][]byte) ([][]byte, error) {
 
 // Decode reads shards from readers in parallel and reconstructs the original data.
 // offset and length refer to the original (pre-erasure) byte range.
-func (e *Erasure) Decode(ctx context.Context, writer io.Writer, readers []io.ReaderAt, offset, length, totalLength int64) error {
+func (e *Erasure) Decode(
+	ctx context.Context,
+	writer io.Writer,
+	readers []io.ReaderAt,
+	offset, length, totalLength int64,
+) error {
 	if length == 0 {
 		return nil
 	}

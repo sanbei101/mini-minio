@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+version: "2"
+run:
+  tests: false
+
+linters:
+  default: standard # 包含 errorcheck, govet, ineffassign, staticcheck, structcheck, unused
+  enable:
+    - gocritic
+    - canonicalheader
+    - errorlint
+    - perfsprint
+    - modernize
+    - revive
+    - bodyclose
+    - whitespace
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - opinionated
+      disabled-tags:
+        - experimental
+    
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+    - golines
+  settings:
+    gci:
+      sections:
+        - Standard
+        - Default
+        - Prefix(github.com/sanbei101/mini-minio)
+    gofumpt:
+      extra-rules: true
+      module-path: "github.com/sanbei101/mini-minio"
+
+    golines:
+      max-len: 120
+      shorten-comments: true
+  exclusions:
+    warn-unused: true
+    paths:
+      - "copy"

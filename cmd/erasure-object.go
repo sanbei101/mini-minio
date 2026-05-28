@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/sanbei101/mini-minio/internal/bpool"
 	"github.com/sanbei101/mini-minio/internal/erasure"
 	"github.com/sanbei101/mini-minio/internal/storage"
@@ -47,7 +48,11 @@ type erasureObjects struct {
 	mu           sync.RWMutex
 }
 
-func newErasureObjects(diskPaths []string, dataBlocks, parityBlocks int, pool *bpool.BytePoolCap) (*erasureObjects, error) {
+func newErasureObjects(
+	diskPaths []string,
+	dataBlocks, parityBlocks int,
+	pool *bpool.BytePoolCap,
+) (*erasureObjects, error) {
 	disks := make([]*storage.Disk, len(diskPaths))
 	for i, p := range diskPaths {
 		d, err := storage.NewDisk(p)
@@ -385,7 +390,12 @@ func (e *erasureObjects) GetObjectInfo(ctx context.Context, bucket, object strin
 	}, nil
 }
 
-func (e *erasureObjects) GetObjectNInfo(ctx context.Context, bucket, object string, rs *HTTPRangeSpec, h http.Header) (*GetObjectReader, error) {
+func (e *erasureObjects) GetObjectNInfo(
+	ctx context.Context,
+	bucket, object string,
+	rs *HTTPRangeSpec,
+	h http.Header,
+) (*GetObjectReader, error) {
 	meta, err := e.readMeta(bucket, object)
 	if err != nil {
 		return nil, err
@@ -458,7 +468,13 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 	return info, nil
 }
 
-func (e *erasureObjects) ListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int, fetchOwner bool, startAfter string) (ListObjectsV2Info, error) {
+func (e *erasureObjects) ListObjectsV2(
+	ctx context.Context,
+	bucket, prefix, continuationToken, delimiter string,
+	maxKeys int,
+	fetchOwner bool,
+	startAfter string,
+) (ListObjectsV2Info, error) {
 	names, err := e.listObjectNames(bucket, prefix)
 	if errors.Is(err, storage.ErrNotFound) {
 		return ListObjectsV2Info{}, ErrBucketNotFound
@@ -645,7 +661,12 @@ func uploadPart(uploadID string, partNumber int, r io.Reader) (string, error) {
 	return etag, nil
 }
 
-func completeMultipartUpload(ctx context.Context, ol ObjectLayer, uploadID string, partNumbers []int) (ObjectInfo, error) {
+func completeMultipartUpload(
+	ctx context.Context,
+	ol ObjectLayer,
+	uploadID string,
+	partNumbers []int,
+) (ObjectInfo, error) {
 	multipartMu.Lock()
 	up, ok := multipartUploads[uploadID]
 	multipartMu.Unlock()
