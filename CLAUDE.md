@@ -27,3 +27,9 @@
 - 需要使用`Go`语言编写,并且代码风格需要符合`Go`的最新语法规范
 - 仍然使用`https://github.com/klauspost/reedsolomon`这个原版纠删码库,抄袭原版`minio`的`ObjectLayer`的时候,
   需要保留原版的高性能的代码,汲取原版的优秀设计理念,但是不需要那些为了安全和兼容性而写的冗余代码
+
+## 规范
+- 每次修改完成代码,需要运行`golangci-lint run --fix`检查代码质量并自动解决,需要保证没有任何lint错误
+- `unused-parameter`的lint错误可以先不解决,但需要说明为什么没有使用,然后给我报告
+- 运行完`lint`之后还需要运行`golangci-lint fmt`格式化代码,保证代码风格一致
+- 最后运行`go test ./...`确保所有测试用例都通过

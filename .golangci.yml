@@ -23,14 +23,19 @@ linters:
         - opinionated
       disabled-tags:
         - experimental
-    
     revive:
       enable-default-rules: true
       rules:
-        - name: exported
-          disabled: true
-        - name: package-comments
-          disabled: true
+        - name: unused-parameter
+  exclusions:
+    warn-unused: true
+    paths:
+      - "copy"
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
 
 formatters:
   enable:
