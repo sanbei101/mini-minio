@@ -146,21 +146,36 @@ func (d *Disk) DeleteObject(bucket, object string) error {
 
 func (d *Disk) ListObjects(bucket, prefix string) ([]string, error) {
 	dir := filepath.Join(d.path, bucket)
-	entries, err := os.ReadDir(dir)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+
+	var names []string
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || entry.Name() != metaFile {
+			return nil
+		}
+		objectDir := filepath.Dir(path)
+		name, err := filepath.Rel(dir, objectDir)
+		if err != nil {
+			return err
+		}
+		name = filepath.ToSlash(name)
+		if prefix == "" || len(name) >= len(prefix) && name[:len(prefix)] == prefix {
+			names = append(names, name)
+		}
+		return nil
+	})
 	if os.IsNotExist(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
-	}
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			name := e.Name()
-			if prefix == "" || len(name) >= len(prefix) && name[:len(prefix)] == prefix {
-				names = append(names, name)
-			}
-		}
 	}
 	return names, nil
 }

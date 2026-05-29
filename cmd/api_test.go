@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,6 +102,73 @@ func setup(t *testing.T) (*httptest.Server, string, string) {
 	return srv, ak, sk
 }
 
+type apiTestServer struct {
+	t      *testing.T
+	server *httptest.Server
+	ak     string
+	sk     string
+}
+
+type apiResponse struct {
+	status int
+	header http.Header
+	body   []byte
+}
+
+func newAPITestServer(t *testing.T) *apiTestServer {
+	t.Helper()
+	srv, ak, sk := setup(t)
+	return &apiTestServer{t: t, server: srv, ak: ak, sk: sk}
+}
+
+func (s *apiTestServer) do(method, target string, body io.Reader, headers http.Header) apiResponse {
+	s.t.Helper()
+
+	requestURL := target
+	sign := false
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		requestURL = s.server.URL + target
+		sign = true
+	}
+
+	req, err := http.NewRequest(method, requestURL, body)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	if sign {
+		signRequest(s.t, req, s.ak, s.sk)
+	}
+
+	resp, err := s.server.Client().Do(req)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return apiResponse{status: resp.StatusCode, header: resp.Header.Clone(), body: respBody}
+}
+
+func (s *apiTestServer) signed(method, target string, body io.Reader) apiResponse {
+	s.t.Helper()
+	return s.do(method, target, body, nil)
+}
+
+func requireStatus(t *testing.T, got, want int, body []byte) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("want status %d, got %d; body=%s", want, got, body)
+	}
+}
+
 func TestNoAuthRejected(t *testing.T) {
 	srv, _, _ := setup(t)
 	resp, err := http.Get(srv.URL + "/")
@@ -113,100 +181,160 @@ func TestNoAuthRejected(t *testing.T) {
 	}
 }
 
-func TestPresignedURLs(t *testing.T) {
-	srv, ak, sk := setup(t)
-	client := srv.Client()
-	do := func(method, target string, body io.Reader) (int, []byte) {
-		var req *http.Request
-		var err error
-		if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-			req, err = http.NewRequest(method, target, body)
-		} else {
-			req, err = http.NewRequest(method, srv.URL+target, body)
-			if err == nil {
-				signRequest(t, req, ak, sk)
-			}
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return resp.StatusCode, respBody
+func TestBucketAPIs(t *testing.T) {
+	api := newAPITestServer(t)
+
+	resp := api.signed(http.MethodPut, "/bucket-a", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	if location := resp.header.Get("Location"); location != "/bucket-a" {
+		t.Fatalf("unexpected bucket location: %q", location)
 	}
+
+	resp = api.signed(http.MethodHead, "/bucket-a", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+
+	resp = api.signed(http.MethodGet, "/", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	if !strings.Contains(string(resp.body), "<Name>bucket-a</Name>") {
+		t.Fatalf("list buckets missing bucket-a: %s", resp.body)
+	}
+
+	resp = api.signed(http.MethodDelete, "/bucket-a", nil)
+	requireStatus(t, resp.status, http.StatusNoContent, resp.body)
+
+	resp = api.signed(http.MethodHead, "/bucket-a", nil)
+	requireStatus(t, resp.status, http.StatusNotFound, resp.body)
+}
+
+func TestObjectAPIs(t *testing.T) {
+	api := newAPITestServer(t)
+	requireStatus(t, api.signed(http.MethodPut, "/objects", nil).status, http.StatusOK, nil)
+
+	const body = "hello mini-minio object api"
+	resp := api.signed(http.MethodPut, "/objects/path/to/file.txt", strings.NewReader(body))
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	if etag := resp.header.Get("ETag"); etag == "" {
+		t.Fatal("PUT object did not return ETag")
+	}
+
+	resp = api.signed(http.MethodHead, "/objects/path/to/file.txt", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	if got := resp.header.Get("Content-Length"); got != fmt.Sprint(len(body)) {
+		t.Fatalf("unexpected Content-Length: %q", got)
+	}
+
+	resp = api.signed(http.MethodGet, "/objects/path/to/file.txt", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	if string(resp.body) != body {
+		t.Fatalf("GET body mismatch: %q", resp.body)
+	}
+
+	rangeHeaders := http.Header{"Range": []string{"bytes=6-14"}}
+	resp = api.do(http.MethodGet, "/objects/path/to/file.txt", nil, rangeHeaders)
+	requireStatus(t, resp.status, http.StatusPartialContent, resp.body)
+	if string(resp.body) != "mini-mini" {
+		t.Fatalf("range GET body mismatch: %q", resp.body)
+	}
+	if got := resp.header.Get("Content-Range"); got != "bytes 6-14/27" {
+		t.Fatalf("unexpected Content-Range: %q", got)
+	}
+
+	resp = api.signed(http.MethodDelete, "/objects/path/to/file.txt", nil)
+	requireStatus(t, resp.status, http.StatusNoContent, resp.body)
+
+	resp = api.signed(http.MethodGet, "/objects/path/to/file.txt", nil)
+	requireStatus(t, resp.status, http.StatusNotFound, resp.body)
+}
+
+func TestMultipartUploadAPI(t *testing.T) {
+	api := newAPITestServer(t)
+	requireStatus(t, api.signed(http.MethodPut, "/multipart", nil).status, http.StatusOK, nil)
+
+	resp := api.signed(http.MethodPost, "/multipart/large.txt?uploads", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+
+	var initResp struct {
+		UploadID string `xml:"UploadId"`
+	}
+	if err := xml.Unmarshal(resp.body, &initResp); err != nil {
+		t.Fatal(err)
+	}
+	if initResp.UploadID == "" {
+		t.Fatalf("missing upload id in response: %s", resp.body)
+	}
+
+	resp = api.signed(
+		http.MethodPut,
+		"/multipart/large.txt?partNumber=2&uploadId="+url.QueryEscape(initResp.UploadID),
+		strings.NewReader("world"),
+	)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+
+	resp = api.signed(
+		http.MethodPut,
+		"/multipart/large.txt?partNumber=1&uploadId="+url.QueryEscape(initResp.UploadID),
+		strings.NewReader("hello "),
+	)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+
+	completeBody := `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber></Part><Part><PartNumber>2</PartNumber></Part></CompleteMultipartUpload>`
+	resp = api.signed(
+		http.MethodPost,
+		"/multipart/large.txt?uploadId="+url.QueryEscape(initResp.UploadID),
+		strings.NewReader(completeBody),
+	)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+
+	resp = api.signed(http.MethodGet, "/multipart/large.txt", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	if string(resp.body) != "hello world" {
+		t.Fatalf("multipart body mismatch: %q", resp.body)
+	}
+}
+
+func TestPresignedURLs(t *testing.T) {
+	api := newAPITestServer(t)
 
 	// create bucket
-	if code, _ := do(http.MethodPut, "/presignbucket", nil); code != http.StatusOK {
-		t.Fatalf("create bucket failed: %d", code)
-	}
+	resp := api.signed(http.MethodPut, "/presignbucket", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
 
 	// generate presigned PUT URL and upload data
-	putURL := cmd.PresignPutObject(srv.URL, "presignbucket", "file.txt", ak, sk, 10*time.Minute)
-	code, _ := do(http.MethodPut, putURL, strings.NewReader("presigned content"))
-	if code != http.StatusOK {
-		t.Fatalf("presigned PUT failed: %d", code)
-	}
-	code, _ = do(http.MethodPut, putURL+"attacker", strings.NewReader("malicious content"))
-	if code == http.StatusOK {
-		t.Fatalf("presigned PUT should not allow modifying URL: %d", code)
+	putURL := cmd.PresignPutObject(api.server.URL, "presignbucket", "file.txt", api.ak, api.sk, 10*time.Minute)
+	resp = api.signed(http.MethodPut, putURL, strings.NewReader("presigned content"))
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+
+	resp = api.signed(http.MethodPut, putURL+"attacker", strings.NewReader("malicious content"))
+	if resp.status == http.StatusOK {
+		t.Fatalf("presigned PUT should not allow modifying URL: %d", resp.status)
 	}
 	// generate presigned GET URL and retrieve data
-	getURL := cmd.PresignGetObject(srv.URL, "presignbucket", "file.txt", ak, sk, 10*time.Minute)
-	code, body := do(http.MethodGet, getURL, nil)
-	if code != http.StatusOK {
-		t.Fatalf("presigned GET failed: %d", code)
-	}
-	if string(body) != "presigned content" {
-		t.Fatalf("body mismatch: %q", body)
+	getURL := cmd.PresignGetObject(api.server.URL, "presignbucket", "file.txt", api.ak, api.sk, 10*time.Minute)
+	resp = api.signed(http.MethodGet, getURL, nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	if string(resp.body) != "presigned content" {
+		t.Fatalf("body mismatch: %q", resp.body)
 	}
 }
 
 func TestListObjectsDelimiter(t *testing.T) {
-	srv, ak, sk := setup(t)
-	client := srv.Client()
-
-	do := func(method, target string, body io.Reader) (int, []byte) {
-		req, err := http.NewRequest(method, srv.URL+target, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		signRequest(t, req, ak, sk)
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		respBody, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, respBody
-	}
+	api := newAPITestServer(t)
 
 	// Create bucket
-	if code, _ := do(http.MethodPut, "/testdir", nil); code != http.StatusOK {
-		t.Fatalf("create bucket: %d", code)
-	}
+	resp := api.signed(http.MethodPut, "/testdir", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
 
 	// Upload objects: some with "/" in name, some without
 	objects := []string{"readme.txt", "a/b.txt", "a/c.txt", "a/x/y.txt"}
 	for _, obj := range objects {
-		code, _ := do(http.MethodPut, "/testdir/"+obj, strings.NewReader("content of "+obj))
-		if code != http.StatusOK {
-			t.Fatalf("PUT %s: %d", obj, code)
-		}
+		resp = api.signed(http.MethodPut, "/testdir/"+obj, strings.NewReader("content of "+obj))
+		requireStatus(t, resp.status, http.StatusOK, resp.body)
 	}
 
 	// List with no delimiter — should return all objects recursively
-	code, body := do(http.MethodGet, "/testdir?prefix=&delimiter=", nil)
-	if code != http.StatusOK {
-		t.Fatalf("list no delimiter: %d", code)
-	}
-	bodyStr := string(body)
+	resp = api.signed(http.MethodGet, "/testdir?prefix=&delimiter=", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	bodyStr := string(resp.body)
 	for _, obj := range objects {
 		if !strings.Contains(bodyStr, "<Key>"+obj+"</Key>") {
 			t.Errorf("no delimiter: missing %q in response", obj)
@@ -214,11 +342,9 @@ func TestListObjectsDelimiter(t *testing.T) {
 	}
 
 	// List with delimiter="/" — should return "readme.txt" as object, "a/" as prefix
-	code, body = do(http.MethodGet, "/testdir?delimiter=/", nil)
-	if code != http.StatusOK {
-		t.Fatalf("list delimiter=/ : %d", code)
-	}
-	bodyStr = string(body)
+	resp = api.signed(http.MethodGet, "/testdir?delimiter=/", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	bodyStr = string(resp.body)
 	if !strings.Contains(bodyStr, "<Key>readme.txt</Key>") {
 		t.Errorf("delimiter=/: missing readme.txt")
 	}
@@ -227,11 +353,9 @@ func TestListObjectsDelimiter(t *testing.T) {
 	}
 
 	// List with prefix="a/" and delimiter="/" — should return "a/b.txt", "a/c.txt" as objects, "a/x/" as prefix
-	code, body = do(http.MethodGet, "/testdir?prefix=a/&delimiter=/", nil)
-	if code != http.StatusOK {
-		t.Fatalf("list prefix=a/ delimiter=/ : %d", code)
-	}
-	bodyStr = string(body)
+	resp = api.signed(http.MethodGet, "/testdir?prefix=a/&delimiter=/", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	bodyStr = string(resp.body)
 	if !strings.Contains(bodyStr, "<Key>a/b.txt</Key>") {
 		t.Errorf("prefix=a/ delimiter=/: missing a/b.txt")
 	}
