@@ -84,6 +84,7 @@ func requestLoggingMiddleware(next http.Handler) http.Handler {
 			Msg("http request")
 	})
 }
+
 func authMiddleware(creds Credentials, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error

@@ -184,13 +184,13 @@ func TestNoAuthRejected(t *testing.T) {
 func TestBucketAPIs(t *testing.T) {
 	api := newAPITestServer(t)
 
-	resp := api.signed(http.MethodPut, "/bucket-a", nil)
+	resp := api.signed(http.MethodPut, "/bucket-a/", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 	if location := resp.header.Get("Location"); location != "/bucket-a" {
 		t.Fatalf("unexpected bucket location: %q", location)
 	}
 
-	resp = api.signed(http.MethodHead, "/bucket-a", nil)
+	resp = api.signed(http.MethodHead, "/bucket-a/", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 
 	resp = api.signed(http.MethodGet, "/", nil)
@@ -199,16 +199,16 @@ func TestBucketAPIs(t *testing.T) {
 		t.Fatalf("list buckets missing bucket-a: %s", resp.body)
 	}
 
-	resp = api.signed(http.MethodDelete, "/bucket-a", nil)
+	resp = api.signed(http.MethodDelete, "/bucket-a/", nil)
 	requireStatus(t, resp.status, http.StatusNoContent, resp.body)
 
-	resp = api.signed(http.MethodHead, "/bucket-a", nil)
+	resp = api.signed(http.MethodHead, "/bucket-a/", nil)
 	requireStatus(t, resp.status, http.StatusNotFound, resp.body)
 }
 
 func TestObjectAPIs(t *testing.T) {
 	api := newAPITestServer(t)
-	requireStatus(t, api.signed(http.MethodPut, "/objects", nil).status, http.StatusOK, nil)
+	requireStatus(t, api.signed(http.MethodPut, "/objects/", nil).status, http.StatusOK, nil)
 
 	const body = "hello mini-minio object api"
 	resp := api.signed(http.MethodPut, "/objects/path/to/file.txt", strings.NewReader(body))
@@ -248,7 +248,7 @@ func TestObjectAPIs(t *testing.T) {
 
 func TestMultipartUploadAPI(t *testing.T) {
 	api := newAPITestServer(t)
-	requireStatus(t, api.signed(http.MethodPut, "/multipart", nil).status, http.StatusOK, nil)
+	requireStatus(t, api.signed(http.MethodPut, "/multipart/", nil).status, http.StatusOK, nil)
 
 	resp := api.signed(http.MethodPost, "/multipart/large.txt?uploads", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
@@ -296,7 +296,7 @@ func TestPresignedURLs(t *testing.T) {
 	api := newAPITestServer(t)
 
 	// create bucket
-	resp := api.signed(http.MethodPut, "/presignbucket", nil)
+	resp := api.signed(http.MethodPut, "/presignbucket/", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 
 	// generate presigned PUT URL and upload data
@@ -321,7 +321,7 @@ func TestListObjectsDelimiter(t *testing.T) {
 	api := newAPITestServer(t)
 
 	// Create bucket
-	resp := api.signed(http.MethodPut, "/testdir", nil)
+	resp := api.signed(http.MethodPut, "/testdir/", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 
 	// Upload objects: some with "/" in name, some without
@@ -332,7 +332,7 @@ func TestListObjectsDelimiter(t *testing.T) {
 	}
 
 	// List with no delimiter — should return all objects recursively
-	resp = api.signed(http.MethodGet, "/testdir?prefix=&delimiter=", nil)
+	resp = api.signed(http.MethodGet, "/testdir/?prefix=&delimiter=", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 	bodyStr := string(resp.body)
 	for _, obj := range objects {
@@ -342,7 +342,7 @@ func TestListObjectsDelimiter(t *testing.T) {
 	}
 
 	// List with delimiter="/" — should return "readme.txt" as object, "a/" as prefix
-	resp = api.signed(http.MethodGet, "/testdir?delimiter=/", nil)
+	resp = api.signed(http.MethodGet, "/testdir/?delimiter=/", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 	bodyStr = string(resp.body)
 	if !strings.Contains(bodyStr, "<Key>readme.txt</Key>") {
@@ -353,7 +353,7 @@ func TestListObjectsDelimiter(t *testing.T) {
 	}
 
 	// List with prefix="a/" and delimiter="/" — should return "a/b.txt", "a/c.txt" as objects, "a/x/" as prefix
-	resp = api.signed(http.MethodGet, "/testdir?prefix=a/&delimiter=/", nil)
+	resp = api.signed(http.MethodGet, "/testdir/?prefix=a/&delimiter=/", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 	bodyStr = string(resp.body)
 	if !strings.Contains(bodyStr, "<Key>a/b.txt</Key>") {
