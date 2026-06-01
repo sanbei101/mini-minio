@@ -20,24 +20,30 @@ jobs:
           go-version: 'stable'
           cache: true
 
-      - name: Start mini-minio Server
+      - name: Install mc and warp
         run: |
-          go build -o mini-minio .
-          
-          ./mini-minio -addr=":9000" -access-key="minioadmin" -secret-key="minioadmin123" > server.log 2>&1 &
-
-          sleep 3
-
-          curl -L https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
-
+          wget https://dl.min.io/client/mc/release/linux-amd64/mc -O mc
           chmod +x mc
-          ./mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin123
-          ./mc mb myminio/test-bucket-compatibility
-
-      - name: install warp
-        run: |
+          sudo mv mc /usr/local/bin/
+          
           wget https://dl.min.io/aistor/warp/release/linux-amd64/archive/warp_1.5.0_amd64.deb
           sudo dpkg -i warp_1.5.0_amd64.deb
+
+      - name: Start mini-minio Server
+        run: |
+          go build -trimpath -ldflags="-s -w" -o mini-minio .
+          ./mini-minio -addr=":9000" -access-key="minioadmin" -secret-key="minioadmin123" > server.log 2>&1 &
+          sleep 3
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+          GOAMD64: v3
+
+      - name: Create bucket for benchmark
+        run: |
+          mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin123
+          mc mb myminio/test-bucket-compatibility
       
       - name: Run Warp S3 Benchmark
         run: |
@@ -48,9 +54,14 @@ jobs:
            --noclear \
            --autoterm \
            --objects=50 \
-           --obj.size=64KiB
+           --obj.size=64KiB 2>&1 | tee warp.log
+          echo "## S3 Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -n 100 warp.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Stop mini-minio Server
+        if: always()
         run: |
           pkill mini-minio || true
-          cat server.log
+          tail -n 100 server.log
