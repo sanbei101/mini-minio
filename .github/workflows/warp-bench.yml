@@ -27,13 +27,8 @@ jobs:
           ./mini-minio -addr=":9000" -access-key="minioadmin" -secret-key="minioadmin123" &
           
           sleep 3
-          
-      - name: create bucket
-        run: |
-          curl -L https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
-          chmod +x mc
-          ./mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin123
-          ./mc mb myminio/warp-benchmark-bucket
+
+          mkdir -p ./data/disk{0..5}/warp-benchmark-bucket
 
       - name: install warp
         run: |
@@ -42,4 +37,8 @@ jobs:
       
       - name: Run Warp S3 Benchmark
         run: |
-          warp mixed --host=127.0.0.1:9000 --access-key=minioadmin --secret-key=minioadmin123 --autoterm
+          ./warp mixed --host=127.0.0.1:9000 \
+                       --access-key=minioadmin \
+                       --secret-key=minioadmin123 \
+                       --region=us-east-1 \
+                       --autoterm
