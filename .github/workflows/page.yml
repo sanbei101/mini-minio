@@ -36,6 +36,7 @@ jobs:
           cache-dependency-path: book/pnpm-lock.yaml
 
       - name: Install Dependencies
+        working-directory: book
         run: pnpm install --frozen-lockfile
 
       - name: Build VitePress Site
