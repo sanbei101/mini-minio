@@ -1,0 +1,38 @@
+name: Warp S3 Benchmark
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  warp-benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Start mini-minio Server
+        run: |
+          go build -o mini-minio .
+          
+          ./mini-minio -addr=":9000" -access-key="minioadmin" -secret-key="minioadmin123" &
+          
+          sleep 3
+
+      - name: install warp
+        run: |
+          wget https://dl.min.io/aistor/warp/release/linux-amd64/archive/warp_1.5.0_amd64.deb
+          sudo dpkg -i warp_1.5.0_amd64.deb
+      
+      - name: Run Warp S3 Benchmark
+        run: |
+          warp mixed --host=127.0.0.1:9000 --access-key=minioadmin --secret-key=minioadmin123 --autoterm
