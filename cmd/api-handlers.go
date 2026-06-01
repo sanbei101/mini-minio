@@ -75,7 +75,7 @@ func requestLoggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 
 		next.ServeHTTP(lrw, r)
-		if lrw.statusCode != http.StatusOK {
+		if lrw.statusCode < 200 || lrw.statusCode >= 300 {
 			log.Info().
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
