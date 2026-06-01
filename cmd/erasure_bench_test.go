@@ -273,8 +273,8 @@ func BenchmarkListObjects(b *testing.B) {
 func BenchmarkDiskWriteComparison(b *testing.B) {
 	ctx := context.Background()
 
-	b.Run("Single disk (1+0)", func(b *testing.B) {
-		obj := createErasureLayer(b, 1, 0)
+	b.Run("2+1 disks (minimum erasure)", func(b *testing.B) {
+		obj := createErasureLayer(b, 2, 1)
 		obj.MakeBucket(ctx, "bench-bucket")
 		b.ResetTimer()
 		for b.Loop() {
