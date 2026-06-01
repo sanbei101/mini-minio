@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: "Mini-Minio 开发指南",
   description: "从零构建一个轻量级对象存储系统",
-  
+  base: "/mini-minio/",
   themeConfig: {
     nav: [
       { text: '首页', link: '/' },
