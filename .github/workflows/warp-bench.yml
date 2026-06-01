@@ -37,8 +37,8 @@ jobs:
       
       - name: Run Warp S3 Benchmark
         run: |
-          ./warp mixed --host=127.0.0.1:9000 \
-                       --access-key=minioadmin \
-                       --secret-key=minioadmin123 \
-                       --region=us-east-1 \
-                       --autoterm
+          warp mixed --host=127.0.0.1:9000 \
+                --access-key=minioadmin \
+                --secret-key=minioadmin123 \
+                --region=us-east-1 \
+                --autoterm
