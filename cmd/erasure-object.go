@@ -41,11 +41,12 @@ type xlMeta struct {
 
 // erasureObjects implements ObjectLayer using erasure coding across multiple disks.
 type erasureObjects struct {
-	disks        []*storage.Disk
-	dataBlocks   int
-	parityBlocks int
-	pool         *bpool.BytePoolCap
-	mu           sync.RWMutex
+	disks         []*storage.Disk
+	dataBlocks    int
+	parityBlocks  int
+	pool          *bpool.BytePoolCap
+	mu            sync.RWMutex
+	erasureEngine erasure.Erasure
 }
 
 func newErasureObjects(
@@ -61,11 +62,17 @@ func newErasureObjects(
 		}
 		disks[i] = d
 	}
+	engine, err := erasure.New(dataBlocks, parityBlocks, pool)
+	if err != nil {
+		return nil, err
+	}
+
 	return &erasureObjects{
-		disks:        disks,
-		dataBlocks:   dataBlocks,
-		parityBlocks: parityBlocks,
-		pool:         pool,
+		disks:         disks,
+		dataBlocks:    dataBlocks,
+		parityBlocks:  parityBlocks,
+		pool:          pool,
+		erasureEngine: engine,
 	}, nil
 }
 
@@ -249,10 +256,7 @@ func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error 
 }
 
 func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, data *PutObjReader) (ObjectInfo, error) {
-	enc, err := erasure.New(e.dataBlocks, e.parityBlocks, e.pool)
-	if err != nil {
-		return ObjectInfo{}, err
-	}
+	enc := e.erasureEngine
 
 	dataDir := uuid.New().String()
 	writers := make([]io.Writer, len(e.disks))
@@ -400,10 +404,7 @@ func (e *erasureObjects) GetObjectNInfo(
 		return nil, err
 	}
 
-	enc, err := erasure.New(meta.DataBlocks, meta.ParityBlocks, e.pool)
-	if err != nil {
-		return nil, err
-	}
+	enc := e.erasureEngine
 
 	readers := make([]io.ReaderAt, len(e.disks))
 	closers := make([]io.Closer, len(e.disks))
