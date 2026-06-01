@@ -236,7 +236,7 @@ func (a *apiHandlers) PutObject(w http.ResponseWriter, r *http.Request) {
 
 	var body io.Reader = r.Body
 	size := r.ContentLength
-	if r.Header.Get("X-Amz-Content-Sha256") == "STREAMING-AWS4-HMAC-SHA256" ||
+	if strings.Contains(r.Header.Get("X-Amz-Content-Sha256"), "STREAMING-") ||
 		strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") {
 		body = httputil.NewChunkedReader(r.Body)
 		if decodedLen := r.Header.Get("X-Amz-Decoded-Content-Length"); decodedLen != "" {
@@ -370,7 +370,13 @@ func (a *apiHandlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	etag, err := uploadPart(uploadID, partNumber, r.Body)
+	var body io.Reader = r.Body
+	if strings.Contains(r.Header.Get("X-Amz-Content-Sha256"), "STREAMING-") ||
+		strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") {
+		body = httputil.NewChunkedReader(r.Body)
+	}
+
+	etag, err := uploadPart(uploadID, partNumber, body)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "NoSuchUpload", err.Error())
 		return
