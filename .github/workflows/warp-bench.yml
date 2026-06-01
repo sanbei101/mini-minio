@@ -30,7 +30,7 @@ jobs:
           
       - name: create bucket
         run: |
-          curl https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
+          curl -L https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
           chmod +x mc
           ./mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin123
           ./mc mb myminio/warp-benchmark-bucket
