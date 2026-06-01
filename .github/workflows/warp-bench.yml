@@ -24,8 +24,8 @@ jobs:
         run: |
           go build -o mini-minio .
           
-          ./mini-minio -addr=":9000" -access-key="minioadmin" -secret-key="minioadmin123" &
-          
+          ./mini-minio -addr=":9000" -access-key="minioadmin" -secret-key="minioadmin123" > server.log 2>&1 &
+
           sleep 3
 
           mkdir -p ./data/disk{0..5}/warp-benchmark-bucket
@@ -37,8 +37,18 @@ jobs:
       
       - name: Run Warp S3 Benchmark
         run: |
-          warp mixed --host=127.0.0.1:9000 \
-                --access-key=minioadmin \
-                --secret-key=minioadmin123 \
-                --region=us-east-1 \
-                --autoterm
+          if !warp mixed --host=127.0.0.1:9000 \
+                                 --access-key=minioadmin \
+                                 --secret-key=minioadmin123 \
+                                 --region=us-east-1 \
+                                 --noclear \
+                                 --autoterm; then
+            echo "❌ Warp 压测失败！正在为你抓取 mini-minio 服务器后台日志..."
+            echo "=================== SERVER LOGS ==================="
+            cat server.log
+            echo "==================================================="
+            kill $SERVER_PID
+            exit 1
+          fi
+
+          echo "✅ Warp 压测成功！"
