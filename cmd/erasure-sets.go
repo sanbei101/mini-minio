@@ -37,8 +37,8 @@ func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (Object
 		return nil, fmt.Errorf("need disk paths in groups of %d, got %d", setDriveCount, len(diskPaths))
 	}
 
-	// Create buffer pool: 1024 buffers of BlockSize, 4K-aligned.
-	pool := bpool.NewBytePoolCap(1024, erasure.BlockSize, erasure.BlockSize)
+	// Create buffer pool: 64 buffers of BlockSize, 4K-aligned.
+	pool := bpool.NewBytePoolCap(64, erasure.BlockSize, erasure.BlockSize)
 	pool.Populate()
 
 	setCount := len(diskPaths) / setDriveCount
