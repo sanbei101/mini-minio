@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"strconv"
 	"strings"
 	"time"
@@ -74,14 +75,15 @@ func requestLoggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 
 		next.ServeHTTP(lrw, r)
-
-		log.Info().
-			Str("method", r.Method).
-			Str("path", r.URL.Path).
-			Str("query", r.URL.RawQuery).
-			Int("status", lrw.statusCode).
-			Dur("duration", time.Since(start)).
-			Msg("http request")
+		if lrw.statusCode != http.StatusOK {
+			log.Info().
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Str("query", r.URL.RawQuery).
+				Int("status", lrw.statusCode).
+				Dur("duration", time.Since(start)).
+				Msg("http request")
+		}
 	})
 }
 
@@ -232,8 +234,18 @@ func (a *apiHandlers) PutObject(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	bucket, object := vars["bucket"], vars["object"]
 
+	var body io.Reader = r.Body
 	size := r.ContentLength
-	reader, err := NewPutObjReader(r.Body, size)
+	if r.Header.Get("X-Amz-Content-Sha256") == "STREAMING-AWS4-HMAC-SHA256" ||
+		strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") {
+		body = httputil.NewChunkedReader(r.Body)
+		if decodedLen := r.Header.Get("X-Amz-Decoded-Content-Length"); decodedLen != "" {
+			if s, err := strconv.ParseInt(decodedLen, 10, 64); err == nil {
+				size = s
+			}
+		}
+	}
+	reader, err := NewPutObjReader(body, size)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "InvalidRequest", err.Error())
 		return
