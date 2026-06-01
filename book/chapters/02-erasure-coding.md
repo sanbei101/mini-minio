@@ -1,8 +1,8 @@
-# 第2章: 纠删码 (Erasure Coding) 原理与实现
+# 第2章: 纠删码 `Erasure Coding` 原理与实现
 
 ## 2.1 纠删码到底是干什么的
 
-纠删码说白了就是一种"用空间换可靠性"的技术。它把一份数据拆成 n 个片段,其中 k 个是数据片段,m 个是校验片段 (n = k + m)。只要有任意 k 个片段还在,就能把原始数据完整恢复出来。
+纠删码说白了就是一种"用空间换可靠性"的技术。它把一份数据拆成 `n` 个片段,其中 `k` 个是数据片段,`m` 个是校验片段 `(n = k + m)`。只要有任意 k 个片段还在,就能把原始数据完整恢复出来。
 
 跟最朴素的"多存几份副本"比起来,纠删码的存储效率高得多:
 
@@ -34,11 +34,11 @@ func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (Object
 
 ## 2.2 Reed-Solomon 算法: 数学原理
 
-Reed-Solomon 是纠删码最常用的算法,mini-minio 用的 `klauspost/reedsolomon` 库就是它的 Go 实现。
+`Reed-Solomon` 是纠删码最常用的算法,mini-minio 用的 `klauspost/reedsolomon` 库就是它的 Go 实现。
 
-### 有限域 (Galois Field)
+### 有限域 (`Galois Field`)
 
-Reed-Solomon 的所有运算都在 GF(2^8) 有限域里进行,这个域有 256 个元素 (0-255)。有限域里的加法就是 XOR,乘法用预计算的对数/反对数表。为什么要用有限域?因为普通整数运算会产生进位,没法优雅地做多项式插值。有限域里的运算结果还在域内,保证了数学上的封闭性。
+`Reed-Solomon` 的所有运算都在 `GF(2^8)` 有限域里进行,这个域有 256 个元素 (0-255)。有限域里的加法就是 `XOR`,乘法用预计算的对数/反对数表。为什么要用有限域?因为普通整数运算会产生进位,没法优雅地做多项式插值。有限域里的运算结果还在域内,保证了数学上的封闭性。
 
 ### 多项式插值
 
@@ -46,7 +46,7 @@ Reed-Solomon 的所有运算都在 GF(2^8) 有限域里进行,这个域有 256 �
 
 ### 编码矩阵
 
-实际编码时用的是范德蒙德矩阵或柯西矩阵。矩阵的每一行对应一个分片,每一列对应原始数据的一小块。`klauspost/reedsolomon` 库内部会自动选择最优的矩阵实现,还支持 AVX2/SSE 指令集加速。
+实际编码时用的是范德蒙德矩阵或柯西矩阵。矩阵的每一行对应一个分片,每一列对应原始数据的一小块。`klauspost/reedsolomon` 库内部会自动选择最优的矩阵实现,还支持 `AVX2`/`SSE` 指令集加速。
 
 ## 2.3 Erasure 结构体: 核心实现
 
@@ -89,7 +89,7 @@ func New(dataBlocks, parityBlocks int, pool *bpool.BytePoolCap) (Erasure, error)
 }
 ```
 
-`sync.Once` 保证编码器只初始化一次,多个 goroutine 并发调用也安全。`reedsolomon.WithAutoGoroutines` 让库根据分片大小自动决定用多少个 goroutine 并行编码,不需要手动调。
+`sync.Once` 保证编码器只初始化一次,多个 `goroutine` 并发调用也安全。`reedsolomon.WithAutoGoroutines` 让库根据分片大小自动决定用多少个 `goroutine` 并行编码,不需要手动调。
 
 `BlockSize` 是 10 MiB:
 
@@ -97,7 +97,7 @@ func New(dataBlocks, parityBlocks int, pool *bpool.BytePoolCap) (Erasure, error)
 const BlockSize = 10 << 20 // 10 MiB
 ```
 
-每次读数据都是读一整个 BlockSize 大小的块,然后对这个块做纠删码编码。分片大小是 BlockSize 除以数据块数:
+每次读数据都是读一整个 `BlockSize` 大小的块,然后对这个块做纠删码编码。分片大小是 `BlockSize` 除以数据块数:
 
 ```go
 func (e *Erasure) ShardSize() int64 {
@@ -144,7 +144,7 @@ buffer = buffer[:erasure.BlockSize]
 
 缓冲池的作用后面会详细说。这里先知道: 一个 10 MiB 的 buffer 被复用来读取数据块。
 
-### 第三步: 计算 ETag 并编码
+### 第三步: 计算 `ETag` 并编码
 
 ```go
 md5h := md5.New()
@@ -333,7 +333,7 @@ for i, d := range e.disks {
 
 ### 第三步: 并行读取和解码
 
-解码用的是 `io.Pipe` 实现流式处理 -- 一个 goroutine 负责解码并写入 pipe 的写端,调用者从 pipe 的读端读数据:
+解码用的是 `io.Pipe` 实现流式处理 -- 一个 `goroutine` 负责解码并写入 pipe 的写端,调用者从 pipe 的读端读数据:
 
 ```go
 pr, pw := io.Pipe()
@@ -397,7 +397,7 @@ func (e *Erasure) DecodeDataBlocks(data [][]byte) error {
 
 ### parallelReader: 并行读取的实现
 
-`parallelReader` 是一个比较精巧的设计。它用 channel-trigger 模式来控制并行读取: 先启动 dataBlocks 个 goroutine 去读,如果某个 goroutine 读成功了就通知停止,读失败了就启动下一个:
+`parallelReader` 是一个比较精巧的设计。它用 `channel-trigger` 模式来控制并行读取: 先启动 dataBlocks 个 `goroutine` 去读,如果某个 `goroutine` 读成功了就通知停止,读失败了就启动下一个:
 
 ```go
 // channel-trigger 模式
@@ -461,7 +461,7 @@ func (bp *BytePoolCap) Populate() {
 }
 ```
 
-`reedsolomon.AllocAligned` 分配的内存是 4K 对齐的 -- 这对磁盘 I/O 性能很重要,因为操作系统的页大小通常是 4K,对齐的内存可以直接用 O_DIRECT 模式读写,避免额外的拷贝。
+`reedsolomon.AllocAligned` 分配的内存是 4K 对齐的 -- 这对磁盘 I/O 性能很重要,因为操作系统的页大小通常是 4K,对齐的内存可以直接用 `O_DIRECT` 模式读写,避免额外的拷贝。
 
 Get 和 Put 都是非阻塞的:
 
@@ -517,11 +517,11 @@ mini-minio 的配置是固定的 4+2,写死在启动参数里,不支持运行时
 
 ### 位腐保护 (Bitrot Protection)
 
-原版 MinIO 用 HighwayHash 算法给每个分片文件算校验和,存在 `.meta` 文件里。每次读取时都会验证校验和,发现数据损坏就从其他磁盘恢复。这能防止静默数据腐化 -- 比如磁盘扇区老化导致数据悄悄变坏。
+原版 MinIO 用 `HighwayHash` 算法给每个分片文件算校验和,存在 `.meta` 文件里。每次读取时都会验证校验和,发现数据损坏就从其他磁盘恢复。这能防止静默数据腐化 -- 比如磁盘扇区老化导致数据悄悄变坏。
 
 mini-minio 没有这个机制。分片文件直接读写,没有校验和验证。如果某个分片文件悄悄损坏了,mini-minio 不会发现,直到损坏的分片数量超过容错能力,数据才会真正丢失。
 
-### Readahead 和流式处理
+### `Readahead` 和流式处理
 
 原版 MinIO 对大文件 (>128 MiB) 会启用 `readahead.NewReaderBuffer` 做预读,利用操作系统的 read-ahead 策略提升吞吐量。mini-minio 没有这个优化,直接用 `io.ReadFull` 同步读取。
 
@@ -531,10 +531,10 @@ mini-minio 没有这个机制。分片文件直接读写,没有校验和验证�
 
 ### 多 Part 支持
 
-原版 MinIO 的 Multipart Upload 中,每个 Part 是独立编码的,有自己的分片文件。CompleteMultipartUpload 时只需要组装元数据,不需要拷贝数据。
+原版 MinIO 的 `Multipart Upload` 中,每个 `Part` 是独立编码的,有自己的分片文件。CompleteMultipartUpload 时只需要组装元数据,不需要拷贝数据。
 
-mini-minio 的 Multipart Upload 把所有 Part 数据存在内存里,CompleteMultipartUpload 时拼成一个完整的 buffer 再走 PutObject。如果上传一个 5 GB 的文件分成 5 个 Part,这 5 GB 数据全在内存里。
+mini-minio 的 `Multipart Upload` 把所有 `Part` 数据存在内存里,CompleteMultipartUpload 时拼成一个完整的 buffer 再走 PutObject。如果上传一个 5 GB 的文件分成 5 个 `Part`,这 5 GB 数据全在内存里。
 
 ### 编码器自检
 
-原版 MinIO 启动时会对 Reed-Solomon 编码器做自检 (self-test),验证编码和解码计算是否正确。mini-minio 没有这个步骤,直接信任 `klauspost/reedsolomon` 库。
+原版 MinIO 启动时会对 `Reed-Solomon` 编码器做自检 (self-test),验证编码和解码计算是否正确。mini-minio 没有这个步骤,直接信任 `klauspost/reedsolomon` 库。

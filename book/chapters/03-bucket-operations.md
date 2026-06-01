@@ -1,8 +1,8 @@
-# 第3章: Bucket 操作
+# 第3章: `Bucket` 操作
 
 ## 3.1 ObjectLayer 接口定义
 
-`ObjectLayer` 是 mini-minio 的核心接口,所有存储操作都通过它来定义。跟 Bucket 相关的一共就四个方法:
+`ObjectLayer` 是 mini-minio 的核心接口,所有存储操作都通过它来定义。跟 `Bucket` 相关的一共就四个方法:
 
 ```go
 // cmd/object-api-interface.go
@@ -42,7 +42,7 @@ var (
 
 ## 3.3 CreateBucket
 
-HTTP 层面很简单,就是从 URL 里取出 bucket 名字,调用 `MakeBucket`,如果出错就返回 409 Conflict:
+`HTTP` 层面很简单,就是从 `URL` 里取出 `bucket` 名字,调用 `MakeBucket`,如果出错就返回 409 Conflict:
 
 ```go
 // cmd/api-handlers.go:106
@@ -91,7 +91,7 @@ func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {
 
 几个值得注意的地方:
 
-- **并行创建**: 用 goroutine 同时在所有磁盘上创建目录。如果某个盘已经存在这个 bucket,不算错误(幂等性)。
+- **并行创建**: 用 `goroutine` 同时在所有磁盘上创建目录。如果某个盘已经存在这个 `bucket`,不算错误(幂等性)。
 - **全量成功**: 和后面要讲的删除对象不同,这里要求**所有**磁盘都成功才行。只要有任意一块盘出错就返回错误。
 - **写锁保护**: `e.mu.Lock()` 保证同一时刻只有一个创建/删除操作在进行,避免并发问题。
 
@@ -123,7 +123,7 @@ func (d *Disk) MakeBucket(bucket string) error {
 
 ## 3.4 ListBuckets
 
-S3 协议要求 ListBuckets 返回一个 XML,格式是 `<ListAllMyBucketsResult>`:
+`S3` 协议要求 ListBuckets 返回一个 `XML`,格式是 `<ListAllMyBucketsResult>`:
 
 ```go
 // cmd/api-handlers.go:85
@@ -149,9 +149,9 @@ func (a *apiHandlers) ListBuckets(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-时间格式用的是 `time.RFC3339`(比如 `2026-05-29T10:00:00Z`),这是 S3 规范要求的。
+时间格式用的是 `time.RFC3339`(比如 `2026-05-29T10:00:00Z`),这是 `S3` 规范要求的。
 
-核心实现有个比较有意思的点:它要从所有磁盘收集 bucket 列表,然后做去重:
+核心实现有个比较有意思的点:它要从所有磁盘收集 `bucket` 列表,然后做去重:
 
 ```go
 // cmd/erasure-object.go:89
@@ -218,7 +218,7 @@ func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 }
 ```
 
-去重逻辑:同一个 bucket 在不同磁盘上都存在(因为 MakeBucket 是并行创建的),所以需要按名称合并。合并时保留最早的创建时间,这样返回的信息更准确。
+去重逻辑:同一个 `bucket` 在不同磁盘上都存在(因为 MakeBucket 是并行创建的),所以需要按名称合并。合并时保留最早的创建时间,这样返回的信息更准确。
 
 容错策略和 MakeBucket 不一样:这里不要求所有磁盘都成功,只要有一块盘返回了数据就算成功。只有所有盘都失败了才报错。这是合理的,因为 ListBuckets 是只读操作,部分数据总比没有数据好。
 
@@ -244,11 +244,11 @@ func (d *Disk) ListBuckets() ([]os.FileInfo, error) {
 }
 ```
 
-`os.ReadDir` 读出磁盘根目录下的所有条目,过滤掉非目录的文件(比如 `.DS_Store` 之类的),只返回目录类型。`e.Info()` 拿到的 `os.FileInfo` 里包含了目录的修改时间,正好用来当作 bucket 的创建时间。
+`os.ReadDir` 读出磁盘根目录下的所有条目,过滤掉非目录的文件(比如 `.DS_Store` 之类的),只返回目录类型。`e.Info()` 拿到的 `os.FileInfo` 里包含了目录的修改时间,正好用来当作 `bucket` 的创建时间。
 
 ## 3.5 DeleteBucket
 
-DeleteBucket 的 HTTP 层返回 204 No Content(表示成功但没有 body):
+DeleteBucket 的 `HTTP` 层返回 204 No Content(表示成功但没有 body):
 
 ```go
 // cmd/api-handlers.go:116
@@ -262,7 +262,7 @@ func (a *apiHandlers) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-注意这里对所有错误都返回 404,但实际上只有 bucket 不存在时才会触发。其他磁盘错误也会被包装成 404,这和 CreateBucket 处理所有错误为 409 是一个思路。
+注意这里对所有错误都返回 404,但实际上只有 `bucket` 不存在时才会触发。其他磁盘错误也会被包装成 404,这和 CreateBucket 处理所有错误为 409 是一个思路。
 
 核心实现和 MakeBucket 结构几乎一模一样:
 
@@ -294,9 +294,9 @@ func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error 
 }
 ```
 
-同样要求所有磁盘都成功。如果某个盘上 bucket 已经不存在了(可能之前已经删过),也没关系,`os.IsNotExist` 的错误会被忽略。这种幂等性设计在分布式系统里很重要--客户端重试请求时不会因为"已经删过了"而报错。
+同样要求所有磁盘都成功。如果某个盘上 `bucket` 已经不存在了(可能之前已经删过),也没关系,`os.IsNotExist` 的错误会被忽略。这种幂等性设计在分布式系统里很重要--客户端重试请求时不会因为"已经删过了"而报错。
 
-底层的 `Disk.DeleteBucket` 用的是 `os.Remove`,这个函数只能删除**空目录**。如果 bucket 下还有对象,会返回 `ENOTEMPTY` 错误。这意味着在 mini-minio 里,你不能删除一个非空的 bucket,必须先把里面的东西删干净。
+底层的 `Disk.DeleteBucket` 用的是 `os.Remove`,这个函数只能删除**空目录**。如果 `bucket` 下还有对象,会返回 `ENOTEMPTY` 错误。这意味着在 mini-minio 里,你不能删除一个非空的 `bucket`,必须先把里面的东西删干净。
 
 ```go
 // internal/storage/disk.go:39
@@ -307,7 +307,7 @@ func (d *Disk) DeleteBucket(bucket string) error {
 
 ## 3.6 HeadBucket
 
-S3 的 HEAD 请求通常用来检查资源是否存在,不返回 body。HeadBucket 就是检查 bucket 是否存在:
+`S3` 的 HEAD 请求通常用来检查资源是否存在,不返回 body。HeadBucket 就是检查 `bucket` 是否存在:
 
 ```go
 // cmd/api-handlers.go:125
@@ -361,7 +361,7 @@ func (e *erasureObjects) statBucket(bucket string) (os.FileInfo, error) {
 }
 ```
 
-它是**顺序遍历**,不是并行。原因是 stat 操作本身很快(就是 `os.Stat`),没必要开 goroutine。而且它的逻辑是"找到就返回"--只要有一块盘上存在这个 bucket,直接返回成功。
+它是**顺序遍历**,不是并行。原因是 stat 操作本身很快(就是 `os.Stat`),没必要开 `goroutine`。而且它的逻辑是"找到就返回"--只要有一块盘上存在这个 `bucket`,直接返回成功。
 
 错误处理也值得注意:它区分了 `ErrNotFound` 和其他错误。如果某块盘返回的是"找不到"(可能是那块盘坏了),会继续检查下一块盘。但如果返回的是其他错误(比如 IO 错误),会优先返回这个错误,而不是继续检查。这是因为 IO 错误可能意味着更严重的问题。
 
@@ -394,17 +394,17 @@ type erasureObjects struct {
 }
 ```
 
-但并不是所有 bucket 操作都用它。只有**写操作**(MakeBucket、DeleteBucket)会获取写锁,读操作(ListBuckets、GetBucketInfo)完全没有用锁。这在并发安全上其实有点冒险--如果在 ListBuckets 执行的同时有 MakeBucket 在跑,理论上可能读到不一致的状态。不过在 mini-minio 的简化场景下,这种竞态条件的影响可以忽略。
+但并不是所有 `bucket` 操作都用它。只有**写操作**(MakeBucket、DeleteBucket)会获取写锁,读操作(ListBuckets、GetBucketInfo)完全没有用锁。这在并发安全上其实有点冒险--如果在 ListBuckets 执行的同时有 MakeBucket 在跑,理论上可能读到不一致的状态。不过在 mini-minio 的简化场景下,这种竞态条件的影响可以忽略。
 
 ## 3.8 和原版 MinIO 的差异
 
 ### 架构层次
 
-原版 MinIO 的 bucket 操作要经过好几层: `erasureServerPools -> s3Peer -> erasureSets -> erasureObjects`。每一层都有自己的职责--`erasureServerPools` 管理多个服务器池,`s3Peer` 处理分布式节点间的通信,`erasureSets` 管理纠删码集合。mini-minio 把这些全部砍掉了,只保留了两层: `erasureObjects -> storage.Disk`。
+原版 MinIO 的 `bucket` 操作要经过好几层: `erasureServerPools -> s3Peer -> erasureSets -> erasureObjects`。每一层都有自己的职责--`erasureServerPools` 管理多个服务器池,`s3Peer` 处理分布式节点间的通信,`erasureSets` 管理纠删码集合。mini-minio 把这些全部砍掉了,只保留了两层: `erasureObjects -> storage.Disk`。
 
 ### 分布式锁 vs 本地锁
 
-原版 MinIO 用的是 `dsync` 分布式锁,确保集群中只有一个节点在执行 bucket 操作:
+原版 MinIO 用的是 `dsync` 分布式锁,确保集群中只有一个节点在执行 `bucket` 操作:
 
 ```go
 // 原版 MinIO
@@ -417,16 +417,16 @@ mini-minio 直接用 `sync.RWMutex`,只在单进程内有效。
 
 ### Bucket 元数据
 
-原版 MinIO 在创建 bucket 时会同时创建一堆元数据配置:版本控制、对象锁定、配额、复制等。这些配置都存储在 `.minio.sys/bucket/` 目录下。mini-minio 完全没有这个机制,bucket 就是一个普通的目录。
+原版 MinIO 在创建 `bucket` 时会同时创建一堆元数据配置:版本控制、对象锁定、配额、复制等。这些配置都存储在 `.minio.sys/bucket/` 目录下。mini-minio 完全没有这个机制,`bucket` 就是一个普通的目录。
 
 ### MakeBucket 流程对比
 
 原版 MinIO 的 MakeBucket 做了这些事:
 1. 获取分布式锁
-2. 验证 bucket 名称(长度、字符等)
+2. 验证 `bucket` 名称(长度、字符等)
 3. 检查是否已存在
 4. 在所有磁盘上创建目录
-5. 创建 bucket 元数据(版本控制、对象锁定等)
+5. 创建 `bucket` 元数据(版本控制、对象锁定等)
 6. 保存元数据到 `.minio.sys/bucket/`
 
 mini-minio 的 MakeBucket 就三步:
@@ -436,7 +436,7 @@ mini-minio 的 MakeBucket 就三步:
 
 ### DeleteBucket 流程对比
 
-原版 MinIO 在删除前会检查 bucket 是否为空:
+原版 MinIO 在删除前会检查 `bucket` 是否为空:
 
 ```go
 // 原版 MinIO
@@ -456,11 +456,11 @@ mini-minio 没有这个检查,直接调用 `os.Remove`。如果目录非空,`os.
 
 ### GetBucketInfo 元数据丰富
 
-原版 MinIO 的 GetBucketInfo 会从元数据系统中加载版本控制、对象锁定等配置,填充到返回的 BucketInfo 中。mini-minio 只返回 bucket 名称和创建时间。
+原版 MinIO 的 GetBucketInfo 会从元数据系统中加载版本控制、对象锁定等配置,填充到返回的 BucketInfo 中。mini-minio 只返回 `bucket` 名称和创建时间。
 
 ## 3.9 回顾一下
 
-四个 bucket 操作的设计模式:
+四个 `bucket` 操作的设计模式:
 
 - **MakeBucket** 和 **DeleteBucket**: 并行操作所有磁盘,要求全部成功,用写锁保护并发
 - **ListBuckets**: 并行读取所有磁盘,做去重和排序,只要有一块盘成功就行

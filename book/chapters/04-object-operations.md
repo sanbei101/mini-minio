@@ -1,8 +1,8 @@
-# 第4章: Object 操作
+# 第4章: `Object` 操作
 
 ## 4.1 ObjectLayer 接口定义
 
-Object 操作是 mini-minio 的核心功能,接口定义了五个方法:
+`Object` 操作是 mini-minio 的核心功能,接口定义了五个方法:
 
 ```go
 // cmd/object-api-interface.go
@@ -15,7 +15,7 @@ type ObjectLayer interface {
 }
 ```
 
-MultipartUpload 的接口没有放在 ObjectLayer 里,而是作为独立的函数存在,后面会专门讲。
+`MultipartUpload` 的接口没有放在 ObjectLayer 里,而是作为独立的函数存在,后面会专门讲。
 
 ## 4.2 数据类型
 
@@ -46,7 +46,7 @@ mini-minio 实际用到的字段不多,主要是 `Bucket`、`Name`、`Size`、`M
 
 ### ObjectPartInfo
 
-每个 Part 的信息,在 MultipartUpload 完成后会记录在 xl.meta 里:
+每个 `Part` 的信息,在 `MultipartUpload` 完成后会记录在 `xl.meta` 里:
 
 ```go
 type ObjectPartInfo struct {
@@ -102,9 +102,9 @@ var (
 
 ## 4.3 PutObject
 
-PutObject 是整个 mini-minio 里最复杂的方法,涉及纠删码编码、并行磁盘写入、MD5 计算、元数据原子写入等多个步骤。
+`PutObject` 是整个 mini-minio 里最复杂的方法,涉及纠删码编码、并行磁盘写入、`MD5` 计算、元数据原子写入等多个步骤。
 
-HTTP 层面,它从 URL 里取出 bucket 和 object 名字,用 `NewPutObjReader` 包装请求体,然后调用 `PutObject`:
+`HTTP` 层面,它从 URL 里取出 bucket 和 object 名字,用 `NewPutObjReader` 包装请求体,然后调用 `PutObject`:
 
 ```go
 // cmd/api-handlers.go:204
@@ -129,7 +129,7 @@ func (a *apiHandlers) PutObject(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-成功时返回 ETag(用双引号包裹,这是 S3 规范的要求)。
+成功时返回 `ETag`(用双引号包裹,这是 `S3` 规范的要求)。
 
 核心实现可以分成几个阶段来看:
 
@@ -271,15 +271,15 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 
 这段代码值得仔细看几个地方:
 
-**UUID 数据目录**: 每个对象的数据都放在一个 UUID 命名的目录里。这样做的好处是,如果上传失败需要重试,新上传的数据会放在新的 UUID 目录下,不会和旧数据冲突。原版 MinIO 也是这么做的。
+**UUID 数据目录**: 每个对象的数据都放在一个 `UUID` 命名的目录里。这样做的好处是,如果上传失败需要重试,新上传的数据会放在新的 `UUID` 目录下,不会和旧数据冲突。原版 MinIO 也是这么做的。
 
 **缓冲池**: 纠删码编码需要一个 `BlockSize` 大小的缓冲区(10 MiB)。每次都分配这么大的 slice 会产生不少 GC 压力,所以用 `bpool.BytePoolCap` 做了缓冲池复用。如果池子里没有可用的缓冲区,才 fallback 到直接分配。
 
-**MD5 计算**: 用 `io.TeeReader` 包了一层,数据在流向纠删码编码器的同时,也在计算 MD5。编码完成后直接取 MD5 值作为 ETag。这个 ETag 和 S3 的行为一致--就是整个对象的 MD5。
+**MD5 计算**: 用 `io.TeeReader` 包了一层,数据在流向纠删码编码器的同时,也在计算 `MD5`。编码完成后直接取 `MD5` 值作为 `ETag`。这个 `ETag` 和 `S3` 的行为一致--就是整个对象的 `MD5`。
 
 **Write Quorum**: `writeQuorum` 的计算逻辑是 `dataBlocks`,但如果 `dataBlocks == parityBlocks` 则加 1。举个例子,4+4 配置下 writeQuorum 是 5,4+2 配置下 writeQuorum 是 4。这个设计保证了即使有 parityBlocks 块磁盘损坏,仍然有足够的数据可以恢复。
 
-**Write-then-Rename**: 元数据写入分两步--先写到 `xl.meta.tmp` 临时文件,检查 Quorum 通过后,再原子性重命名为 `xl.meta`。这样可以防止写到一半崩溃导致元数据损坏。如果写临时文件就失败了,会清理掉所有已写的临时文件。
+**Write-then-Rename**: 元数据写入分两步--先写到 `xl.meta.tmp` 临时文件,检查 `Quorum` 通过后,再原子性重命名为 `xl.meta`。这样可以防止写到一半崩溃导致元数据损坏。如果写临时文件就失败了,会清理掉所有已写的临时文件。
 
 底层的三个磁盘操作:
 
@@ -319,7 +319,7 @@ func (d *Disk) RenameMeta(bucket, object string) error {
 }
 ```
 
-`CreateShardFile` 里的 `partName(partNum)` 会生成 `part.1`、`part.2` 这样的文件名。单次 PutObject 只会创建 `part.1`,MultipartUpload 合并后也是写到 `part.1`。
+`CreateShardFile` 里的 `partName(partNum)` 会生成 `part.1`、`part.2` 这样的文件名。单次 `PutObject` 只会创建 `part.1`,`MultipartUpload` 合并后也是写到 `part.1`。
 
 上传完成后,磁盘上的数据布局:
 
@@ -331,11 +331,11 @@ my-bucket/
         └── part.1       # 纠删码分片数据
 ```
 
-`xl.meta` 里存的是 JSON 格式的 `xlMeta` 结构体,包含对象名称、大小、ETag、数据目录 UUID、纠删码配置、Part 列表等信息。每块磁盘上都会有一份 `xl.meta`,但每份的 `DiskIndex` 字段不同,记录了这块磁盘在整个纠删码组里的位置。
+`xl.meta` 里存的是 `JSON` 格式的 `xlMeta` 结构体,包含对象名称、大小、`ETag`、数据目录 `UUID`、纠删码配置、`Part` 列表等信息。每块磁盘上都会有一份 `xl.meta`,但每份的 `DiskIndex` 字段不同,记录了这块磁盘在整个纠删码组里的位置。
 
 ## 4.4 GetObject
 
-GetObject 的 HTTP 处理器稍微复杂一点,因为它要处理 Range 请求:
+`GetObject` 的 `HTTP` 处理器稍微复杂一点,因为它要处理 `Range` 请求:
 
 ```go
 // cmd/api-handlers.go:224
@@ -399,7 +399,7 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-有 Range 请求时返回 206 Partial Content,没有 Range 时返回 200 OK。响应头里的 `Content-Range` 格式是 `bytes 0-499/1000`,表示"返回的是第 0 到 499 字节,总共 1000 字节"。
+有 `Range` 请求时返回 206 Partial Content,没有 `Range` 时返回 200 OK。响应头里的 `Content-Range` 格式是 `bytes 0-499/1000`,表示"返回的是第 0 到 499 字节,总共 1000 字节"。
 
 `io.Copy` 是流式传输,不会把整个对象加载到内存里。如果客户端中途断开连接,r.Context().Err() 会返回非 nil,这时只记一条警告日志就返回了,不会继续浪费资源。
 
@@ -470,11 +470,11 @@ func (e *erasureObjects) GetObjectNInfo(
 }
 ```
 
-这里面最巧妙的设计是 **io.Pipe 模式**。`GetObjectNInfo` 返回的不是一个已经解码好的数据,而是一个 Pipe 的读端。真正的解码在 goroutine 里异步进行--HTTP handler 调用 `io.Copy(w, objReader)` 时,才会通过 Pipe 驱动 goroutine 里的解码过程。这样整个数据流是流式的,不需要把整个对象缓冲到内存里。
+这里面最巧妙的设计是 **io.Pipe 模式**。`GetObjectNInfo` 返回的不是一个已经解码好的数据,而是一个 Pipe 的读端。真正的解码在 `goroutine` 里异步进行--`HTTP` handler 调用 `io.Copy(w, objReader)` 时,才会通过 Pipe 驱动 `goroutine` 里的解码过程。这样整个数据流是流式的,不需要把整个对象缓冲到内存里。
 
-文件关闭也在 goroutine 里完成,因为解码没结束之前文件不能关。
+文件关闭也在 `goroutine` 里完成,因为解码没结束之前文件不能关。
 
-### readMeta: 元数据的 Quorum 投票
+### readMeta: 元数据的 `Quorum` 投票
 
 ```go
 // cmd/erasure-object.go:587
@@ -533,7 +533,7 @@ func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
 
 这种投票机制比简单的"取第一个成功"要靠谱--即使某块磁盘上的元数据被意外损坏了(和大多数不一致),也能被正确识别出来。
 
-### Range 请求解析
+### `Range` 请求解析
 
 ```go
 // cmd/erasure-object.go:638
@@ -554,13 +554,13 @@ func (rs *HTTPRangeSpec) GetOffsetLength(size int64) (int64, int64, error) {
 }
 ```
 
-S3 支持四种 Range 格式:
+`S3` 支持四种 `Range` 格式:
 - `bytes=0-499`: 第 0 到 499 字节,返回 500 字节
 - `bytes=500-999`: 第 500 到 999 字节
 - `bytes=-500`: 最后 500 字节(`IsSuffixLength = true`)
 - `bytes=500-`: 从第 500 字节到末尾(`End = -1`,会被替换成 `size - 1`)
 
-注意 `start > end` 时会返回错误,这是为了防止客户端发来 `bytes=500-100` 这种无效 Range。
+注意 `start > end` 时会返回错误,这是为了防止客户端发来 `bytes=500-100` 这种无效 `Range`。
 
 ### 底层的文件读取
 
@@ -598,11 +598,11 @@ func (d *Disk) ReadMeta(bucket, object string, out any) error {
 }
 ```
 
-`ReadShardFile` 返回的是 `io.ReadCloser`,但实际类型是 `*os.File`,它同时实现了 `io.ReaderAt` 接口。GetObjectNInfo 里把它断言成 `io.ReaderAt`,这样纠删码解码器就可以随机读取文件的不同位置,而不需要顺序读。
+`ReadShardFile` 返回的是 `io.ReadCloser`,但实际类型是 `*os.File`,它同时实现了 `io.ReaderAt` 接口。`GetObjectNInfo` 里把它断言成 `io.ReaderAt`,这样纠删码解码器就可以随机读取文件的不同位置,而不需要顺序读。
 
 ## 4.5 DeleteObject
 
-DeleteObject 的 HTTP 层和其他删除操作一样,成功返回 204 No Content:
+`DeleteObject` 的 `HTTP` 层和其他删除操作一样,成功返回 204 No Content:
 
 ```go
 // cmd/api-handlers.go:299
@@ -690,11 +690,11 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 
 和 DeleteBucket 不同的地方:
 
-**先查后删**: DeleteObject 会先调用 `GetObjectInfo` 确认对象存在,然后把对象信息返回给调用者。这和 S3 的行为一致--删除成功后返回被删除对象的元信息。
+**先查后删**: `DeleteObject` 会先调用 `GetObjectInfo` 确认对象存在,然后把对象信息返回给调用者。这和 `S3` 的行为一致--删除成功后返回被删除对象的元信息。
 
-**上下文取消**: 这里用了一个比较巧妙的方式来支持 context 取消。它把 `wg.Wait()` 放到一个单独的 goroutine 里,然后用 `select` 同时监听 `ctx.Done()` 和 `done` channel。如果客户端取消了请求(比如断开连接),可以尽快返回,不用等所有磁盘都删完。
+**上下文取消**: 这里用了一个比较巧妙的方式来支持 context 取消。它把 `wg.Wait()` 放到一个单独的 `goroutine` 里,然后用 `select` 同时监听 `ctx.Done()` 和 `done` channel。如果客户端取消了请求(比如断开连接),可以尽快返回,不用等所有磁盘都删完。
 
-**Quorum 检查**: 删除成功的磁盘数必须 >= `len(disks)/2 + 1`。这和 PutObject 的 writeQuorum 计算方式不一样--PutObject 用的是 `dataBlocks`,DeleteObject 用的是简单多数。为什么不一样?因为删除操作不需要纠删码,只需要保证"大多数"磁盘删除成功就行。
+**Quorum 检查**: 删除成功的磁盘数必须 >= `len(disks)/2 + 1`。这和 `PutObject` 的 writeQuorum 计算方式不一样--`PutObject` 用的是 `dataBlocks`,`DeleteObject` 用的是简单多数。为什么不一样?因为删除操作不需要纠删码,只需要保证"大多数"磁盘删除成功就行。
 
 **错误日志**: 每块失败的磁盘都会记录一条错误日志,包含磁盘索引,方便排查问题。
 
@@ -711,7 +711,7 @@ func (d *Disk) DeleteObject(bucket, object string) error {
 
 ## 4.6 ListObjects
 
-ListObjects 的 HTTP 处理器要解析一堆查询参数,然后构建 S3 规范的 XML 响应:
+`ListObjects` 的 `HTTP` 处理器要解析一堆查询参数,然后构建 `S3` 规范的 `XML` 响应:
 
 ```go
 // cmd/api-handlers.go:134
@@ -784,7 +784,7 @@ func (a *apiHandlers) ListObjects(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-XML 响应里的 `CommonPrefixes` 是目录模拟的关键--当设置了 delimiter(比如 `/`)时,`photos/2024/cat.jpg` 这种路径会产生一个公共前缀 `photos/2024/`,放在 CommonPrefixes 里,而不是放在 Contents 里。这样客户端就像在浏览文件系统的目录一样。
+`XML` 响应里的 `CommonPrefixes` 是目录模拟的关键--当设置了 delimiter(比如 `/`)时,`photos/2024/cat.jpg` 这种路径会产生一个公共前缀 `photos/2024/`,放在 CommonPrefixes 里,而不是放在 Contents 里。这样客户端就像在浏览文件系统的目录一样。
 
 核心实现分两层: `ListObjectsV2` 负责分页和目录模拟,`listObjectNames` 负责从磁盘收集对象名称。
 
@@ -876,7 +876,7 @@ func (e *erasureObjects) ListObjectsV2(
 
 目录模拟:对每个对象名,去掉 prefix 后看剩余部分是否包含 delimiter。如果包含,截取到 delimiter 出现的位置作为公共前缀。用 `seen` map 去重,避免同一个前缀出现多次。
 
-延迟元数据读取:只对最终要返回的对象才调用 `readMeta` 读取 xl.meta。对于被 delimiter 过滤掉的对象(变成了 prefix),不需要读元数据。这在对象很多但大部分被分组到目录里时,能显著减少磁盘 IO。
+延迟元数据读取:只对最终要返回的对象才调用 `readMeta` 读取 `xl.meta`。对于被 delimiter 过滤掉的对象(变成了 prefix),不需要读元数据。这在对象很多但大部分被分组到目录里时,能显著减少磁盘 IO。
 
 截断判断:如果返回的对象数 + 前缀数达到了 maxKeys,且 names 列表里还有更多对象,就设置 `IsTruncated = true`。`NextContinuationToken` 用最后一个返回的对象名作为下次请求的起点。
 
@@ -922,7 +922,7 @@ func (e *erasureObjects) listObjectNames(bucket, prefix string) ([]string, error
 }
 ```
 
-注意这里遍历磁盘是**顺序的**,不是并行的。这是因为 `disk.ListObjects` 内部要做 `filepath.WalkDir`,如果并行开太多 goroutine 去遍历文件系统,反而可能因为 IO 竞争导致更慢。顺序遍历虽然慢一点,但实现简单,IO 模式也更友好。
+注意这里遍历磁盘是**顺序的**,不是并行的。这是因为 `disk.ListObjects` 内部要做 `filepath.WalkDir`,如果并行开太多 `goroutine` 去遍历文件系统,反而可能因为 IO 竞争导致更慢。顺序遍历虽然慢一点,但实现简单,IO 模式也更友好。
 
 去重逻辑:用 `seen` map 记录已经见过的对象名。因为每个对象的数据和元数据分布在所有磁盘上,所以每个磁盘都会返回相同的对象名列表。去重后只保留一份。
 
@@ -980,7 +980,7 @@ func (d *Disk) ListObjects(bucket, prefix string) ([]string, error) {
 
 ## 4.7 HeadObject
 
-HeadObject 和 GetObject 类似,但不返回 body,只返回响应头。客户端通常用它来检查对象是否存在或者获取对象的大小和类型:
+`HeadObject` 和 `GetObject` 类似,但不返回 body,只返回响应头。客户端通常用它来检查对象是否存在或者获取对象的大小和类型:
 
 ```go
 // cmd/api-handlers.go:283
@@ -1021,11 +1021,11 @@ func (e *erasureObjects) GetObjectInfo(ctx context.Context, bucket, object strin
 }
 ```
 
-`readMeta` 的 Quorum 投票机制在 GetObject 那节已经讲过了,这里不再重复。
+`readMeta` 的 `Quorum` 投票机制在 `GetObject` 那节已经讲过了,这里不再重复。
 
-## 4.8 MultipartUpload (分片上传)
+## 4.8 `MultipartUpload` (分片上传)
 
-分片上传是 S3 里处理大文件的标准方式。整个流程分三步:创建上传 -> 逐个上传分片 -> 合并完成。
+分片上传是 `S3` 里处理大文件的标准方式。整个流程分三步:创建上传 -> 逐个上传分片 -> 合并完成。
 
 mini-minio 的分片上传没有放在 ObjectLayer 接口里,而是作为独立的包级函数实现。原因是分片上传本质上是一个临时状态管理,最终合并时还是会调用 `PutObject`。
 
@@ -1048,7 +1048,7 @@ func (a *apiHandlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Reque
 }
 ```
 
-`newMultipartUpload` 生成一个 UUID 作为 uploadID,然后在内存里创建一个 `multipartUpload` 结构来跟踪这次上传:
+`newMultipartUpload` 生成一个 `UUID` 作为 uploadID,然后在内存里创建一个 `multipartUpload` 结构来跟踪这次上传:
 
 ```go
 // cmd/erasure-object.go:670
@@ -1091,7 +1091,7 @@ func (a *apiHandlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-`uploadPart` 把整个分片的数据读到内存里,计算 MD5 作为 ETag:
+`uploadPart` 把整个分片的数据读到内存里,计算 `MD5` 作为 `ETag`:
 
 ```go
 // cmd/erasure-object.go:684
@@ -1169,7 +1169,7 @@ func (a *apiHandlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Req
 }
 ```
 
-客户端在 CompleteMultipartUpload 请求的 body 里发送一个 XML,列出所有分片的编号和 ETag。服务端按编号顺序把所有分片拼接起来,然后调用 `PutObject` 写入:
+客户端在 CompleteMultipartUpload 请求的 body 里发送一个 `XML`,列出所有分片的编号和 `ETag`。服务端按编号顺序把所有分片拼接起来,然后调用 `PutObject` 写入:
 
 ```go
 // cmd/erasure-object.go:706
@@ -1217,9 +1217,9 @@ func completeMultipartUpload(
 这个实现有一个设计上的取舍:它把所有分片拼成一个完整的对象,然后走 `PutObject` 的标准流程。这意味着:
 1. 所有分片数据必须都在内存里(`bytes.Buffer`)
 2. 合并后磁盘上只有一个 `part.1`,不像原版 MinIO 那样每个分片是独立的 part 文件
-3. ETag 是合并后整个对象的 MD5,不是分片 ETag 的拼接
+3. `ETag` 是合并后整个对象的 `MD5`,不是分片 `ETag` 的拼接
 
-原版 MinIO 的 MultipartUpload 会保留每个分片作为独立的 part 文件,`xl.meta` 里的 Parts 数组记录了每个 part 的位置和大小。读取时可以按 part 读取,支持随机访问单个分片。
+原版 MinIO 的 `MultipartUpload` 会保留每个分片作为独立的 part 文件,`xl.meta` 里的 Parts 数组记录了每个 part 的位置和大小。读取时可以按 part 读取,支持随机访问单个分片。
 
 ### 放弃上传
 
@@ -1236,53 +1236,53 @@ func abortMultipartUpload(uploadID string) {
 
 ## 4.9 和原版 MinIO 的差异
 
-### PutObject
+### `PutObject`
 
-原版 MinIO 的 PutObject 有 15 个步骤,mini-minio 精简到了 9 个。主要砍掉了:
+原版 MinIO 的 `PutObject` 有 15 个步骤,mini-minio 精简到了 9 个。主要砍掉了:
 - **分布式锁**: 原版用 `dsync` 做分布式命名空间锁,mini-minio 没有加锁(单进程场景不需要)
 - **前置条件检查**: 原版支持 `If-Match`、`If-None-Match` 等条件上传
 - **存储类**: 原版可以根据存储类动态调整纠删码配置
-- **Inline Data**: 原版对小对象(默认 128KiB 以下)会把数据直接存在 xl.meta 里,不创建数据文件,读取时更快
+- **Inline Data**: 原版对小对象(默认 128KiB 以下)会把数据直接存在 `xl.meta` 里,不创建数据文件,读取时更快
 - **Readahead**: 原版对大文件(>128MiB)使用预读缓冲,减少磁盘 IO 次数
-- **位腐保护**: 原版用 HighwayHash 计算每个分片的校验和,防止磁盘静默损坏
+- **位腐保护**: 原版用 `HighwayHash` 计算每个分片的校验和,防止磁盘静默损坏
 - **临时目录**: 原版先把数据写到 `minioMetaTmpBucket` 临时位置,成功后再 rename 到目标位置;mini-minio 直接写到目标位置
 
-### GetObject
+### `GetObject`
 
-原版 MinIO 的 GetObject 会获取读锁,防止并发的写操作。mini-minio 没有加锁。原版还支持删除标记检查(版本控制功能)和远程对象(过渡存储功能),mini-minio 都没有。
+原版 MinIO 的 `GetObject` 会获取读锁,防止并发的写操作。mini-minio 没有加锁。原版还支持删除标记检查(版本控制功能)和远程对象(过渡存储功能),mini-minio 都没有。
 
 不过 Pipe 模式是一样的:都用 `io.Pipe` 实现流式解码,避免把整个对象加载到内存。
 
-### DeleteObject
+### `DeleteObject`
 
-原版 MinIO 的 DeleteObject 支持生命周期检查(自动过期)、前缀批量删除、版本化删除标记等功能。mini-minio 就是先查再删,简单直接。
+原版 MinIO 的 `DeleteObject` 支持生命周期检查(自动过期)、前缀批量删除、版本化删除标记等功能。mini-minio 就是先查再删,简单直接。
 
 原版删除时会把数据重命名到一个"回收站"目录(过期后才真正删除),mini-minio 直接 `os.RemoveAll` 彻底删除。
 
-### ListObjects
+### `ListObjects`
 
-原版 MinIO 有一个叫 Metacache 的系统,会缓存目录遍历的结果到磁盘上,下次 ListObjects 可以直接复用。mini-minio 每次都从头遍历。
+原版 MinIO 有一个叫 `Metacache` 的系统,会缓存目录遍历的结果到磁盘上,下次 `ListObjects` 可以直接复用。mini-minio 每次都从头遍历。
 
 ### 元数据格式
 
-原版 MinIO 用的是 msgpack 二进制格式,头部是 `"XL2 " + version`。支持多版本、删除标记、Inline Data 标志、位腐校验和算法、压缩索引等。mini-minio 用 JSON,结构简单,可读性好,但体积更大,解析更慢。
+原版 MinIO 用的是 `msgpack` 二进制格式,头部是 `"XL2 " + version`。支持多版本、删除标记、`Inline Data` 标志、位腐校验和算法、压缩索引等。mini-minio 用 `JSON`,结构简单,可读性好,但体积更大,解析更慢。
 
-### MultipartUpload
+### `MultipartUpload`
 
-原版 MinIO 的分片数据直接写到磁盘,每个分片是独立的 part 文件。mini-minio 把分片全部存在内存里,合并时拼成一个完整的对象再走 PutObject。这是 mini-minio 目前最大的简化之一--上传大文件时内存占用会很高。
+原版 MinIO 的分片数据直接写到磁盘,每个分片是独立的 part 文件。mini-minio 把分片全部存在内存里,合并时拼成一个完整的对象再走 `PutObject`。这是 mini-minio 目前最大的简化之一--上传大文件时内存占用会很高。
 
 ## 4.10 回顾一下
 
-Object 操作的设计可以总结成几个模式:
+`Object` 操作的设计可以总结成几个模式:
 
-**写操作(PutObject)**:并行写所有磁盘 -> 检查 writeQuorum -> 写元数据临时文件 -> 检查元数据 Quorum -> 原子 rename
+**写操作(PutObject)**:并行写所有磁盘 -> 检查 writeQuorum -> 写元数据临时文件 -> 检查元数据 `Quorum` -> 原子 rename
 
-**读操作(GetObject)**:并行读元数据 -> Quorum 投票选正确版本 -> 并行打开分片文件 -> 流式解码(Pipe 模式)
+**读操作(GetObject)**:并行读元数据 -> `Quorum` 投票选正确版本 -> 并行打开分片文件 -> 流式解码(Pipe 模式)
 
-**删除操作(DeleteObject)**:先查再删 -> 并行删除 -> 检查删除 Quorum
+**删除操作(DeleteObject)**:先查再删 -> 并行删除 -> 检查删除 `Quorum`
 
 **列表操作(ListObjects)**:从所有磁盘收集对象名 -> 去重排序 -> 分页 -> 按需读取元数据
 
-**分片上传(MultipartUpload)**:创建上传(内存) -> 逐个上传分片(内存) -> 合并后走 PutObject
+**分片上传(MultipartUpload)**:创建上传(内存) -> 逐个上传分片(内存) -> 合并后走 `PutObject`
 
-Quorum 机制贯穿始终:写的时候要求 >= writeQuorum 块磁盘成功,读的时候用投票选出现次数最多的版本,删的时候要求 >= n/2+1 块磁盘成功。这样即使有几块磁盘挂了,系统仍然能正常工作。
+`Quorum` 机制贯穿始终:写的时候要求 >= writeQuorum 块磁盘成功,读的时候用投票选出现次数最多的版本,删的时候要求 >= n/2+1 块磁盘成功。这样即使有几块磁盘挂了,系统仍然能正常工作。

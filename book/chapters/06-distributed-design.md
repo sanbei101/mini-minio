@@ -1,10 +1,10 @@
-# 第6章: 分布式设计: Erasure Set 与 Quorum 机制
+# 第6章: 分布式设计: `Erasure Set` 与 `Quorum` 机制
 
-## 6.1 为什么需要 Erasure Set
+## 6.1 为什么需要 `Erasure Set`
 
 当你有 12 块盘的时候,最简单的做法是把 12 块盘全扔进一个纠删码组。但这样做有个问题:一旦其中一块盘出了问题,所有对象的读写都会受影响。
 
-更好的做法是把盘分成几组,每组独立做纠删码。这就是 Erasure Set 的思路。
+更好的做法是把盘分成几组,每组独立做纠删码。这就是 `Erasure Set` 的思路。
 
 ```
 12 块盘,每 6 块一组:
@@ -28,7 +28,7 @@ type erasureSets struct {
 }
 ```
 
-`erasureSets` 是面向上层的 ObjectLayer 实现,内部持有多个 `erasureObjects`(每个代表一个 Erasure Set)。`setDriveCount` 记录每个 Set 有多少块盘(等于 `dataBlocks + parityBlocks`)。
+`erasureSets` 是面向上层的 ObjectLayer 实现,内部持有多个 `erasureObjects`(每个代表一个 `Erasure Set`)。`setDriveCount` 记录每个 Set 有多少块盘(等于 `dataBlocks + parityBlocks`)。
 
 初始化逻辑在 `NewErasureObjects` 里:
 
@@ -85,7 +85,7 @@ func (s *erasureSets) setForObject(object string) *erasureObjects {
 }
 ```
 
-CRC32 哈希计算快,分布也还算均匀。同一个对象名总是路由到同一个 Set,这对数据一致性很重要--写入和读取必须走同一个 Set。
+`CRC32` 哈希计算快,分布也还算均匀。同一个对象名总是路由到同一个 Set,这对数据一致性很重要--写入和读取必须走同一个 Set。
 
 对象相关的操作全部委托给对应的 Set:
 
@@ -113,9 +113,9 @@ func (s *erasureSets) GetObjectInfo(ctx context.Context, bucket, object string) 
 
 每个方法都是一行:算哈希,找到 Set,调方法。路由逻辑和业务逻辑完全分离。
 
-## 6.4 Bucket 操作
+## 6.4 `Bucket` 操作
 
-Bucket 跟对象不一样--对象可以按名字哈希到某个 Set,但 Bucket 是全局的,必须在所有 Set 上都存在。
+`Bucket` 跟对象不一样--对象可以按名字哈希到某个 Set,但 `Bucket` 是全局的,必须在所有 Set 上都存在。
 
 ### CreateBucket
 
@@ -131,7 +131,7 @@ func (s *erasureSets) MakeBucket(ctx context.Context, bucket string) error {
 }
 ```
 
-遍历所有 Set,逐个创建。某个 Set 失败了就直接返回错误--这意味着可能会出现部分 Set 有这个 Bucket、部分没有的不一致状态。原版 MinIO 用分布式锁来避免这个问题,mini-minio 没有这个机制。
+遍历所有 Set,逐个创建。某个 Set 失败了就直接返回错误--这意味着可能会出现部分 Set 有这个 `Bucket`、部分没有的不一致状态。原版 MinIO 用分布式锁来避免这个问题,mini-minio 没有这个机制。
 
 ### DeleteBucket
 
@@ -171,7 +171,7 @@ func (s *erasureSets) GetBucketInfo(ctx context.Context, bucket string) (BucketI
 }
 ```
 
-这个方法做了个容错处理:某个 Set 上找不到 Bucket 不代表 Bucket 不存在(可能是创建时部分失败),只有所有 Set 都找不到才算真的不存在。非 `ErrBucketNotFound` 的错误会被优先返回。
+这个方法做了个容错处理:某个 Set 上找不到 `Bucket` 不代表 `Bucket` 不存在(可能是创建时部分失败),只有所有 Set 都找不到才算真的不存在。非 `ErrBucketNotFound` 的错误会被优先返回。
 
 ### ListBuckets
 
@@ -213,11 +213,11 @@ func (s *erasureSets) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
 }
 ```
 
-从所有 Set 收集 Bucket 列表,按名字去重。去重时保留最早的创建时间--这能处理前面说的部分创建失败的情况。只有所有 Set 都失败了(`okSets == 0`)才返回错误,单个 Set 失败不影响整体结果。
+从所有 Set 收集 `Bucket` 列表,按名字去重。去重时保留最早的创建时间--这能处理前面说的部分创建失败的情况。只有所有 Set 都失败了(`okSets == 0`)才返回错误,单个 Set 失败不影响整体结果。
 
 ## 6.5 ListObjects
 
-ListObjects 是整个分布式设计里最复杂的操作。因为对象按哈希分散在不同 Set 里,要列出一个 Bucket 下的所有对象,必须遍历所有 Set。
+ListObjects 是整个分布式设计里最复杂的操作。因为对象按哈希分散在不同 Set 里,要列出一个 `Bucket` 下的所有对象,必须遍历所有 Set。
 
 ```go
 // cmd/erasure-sets.go:134
@@ -336,13 +336,13 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 
 截断判断也有个小细节:当结果数量达到 `maxKeys` 且还有更多数据时,`NextContinuationToken` 设置为最后一个返回的对象名。下次请求带上这个 token,从这个位置继续。
 
-## 6.6 Quorum 机制
+## 6.6 `Quorum` 机制
 
-Quorum 是分布式存储里保证数据一致性的核心手段。基本思想是:写入时必须成功写到足够多的副本,读取时从多个副本中选最"正确"的那个。
+`Quorum` 是分布式存储里保证数据一致性的核心手段。基本思想是:写入时必须成功写到足够多的副本,读取时从多个副本中选最"正确"的那个。
 
-### 写入 Quorum
+### 写入 `Quorum`
 
-在 `PutObject` 里,写入 Quorum 的计算规则是:
+在 `PutObject` 里,写入 `Quorum` 的计算规则是:
 
 ```go
 // cmd/erasure-object.go:273
@@ -358,7 +358,7 @@ if e.dataBlocks == e.parityBlocks {
 - 4+2 配置:writeQuorum = 4。至少 4 块盘写成功才能继续。
 - 4+4 配置:writeQuorum = 5。数据块和校验块一样多时,需要额外一块来保证冗余。
 
-这个 Quorum 不只是数据写入,元数据写入也用它。在 `PutObject` 里,数据编码写完后,元数据通过 Write-then-Rename 写入所有盘,成功数必须 >= writeQuorum:
+这个 `Quorum` 不只是数据写入,元数据写入也用它。在 `PutObject` 里,数据编码写完后,元数据通过 `write-then-rename` 写入所有盘,成功数必须 >= writeQuorum:
 
 ```go
 // cmd/erasure-object.go:337
@@ -378,11 +378,11 @@ if writeOK < writeQuorum {
 }
 ```
 
-不满足 Quorum 时,清理所有临时文件,返回错误。这样客户端知道写入失败了,不会拿到一个半写成功的对象。
+不满足 `Quorum` 时,清理所有临时文件,返回错误。这样客户端知道写入失败了,不会拿到一个半写成功的对象。
 
-### 删除 Quorum
+### 删除 `Quorum`
 
-删除的 Quorum 规则跟写入不一样:
+删除的 `Quorum` 规则跟写入不一样:
 
 ```go
 // cmd/erasure-object.go:504
@@ -396,7 +396,7 @@ if successCount < writeQuorum {
 
 删除用的是 `len(disks)/2 + 1`--简单多数。6 块盘需要 4 块删除成功。为什么不用 `dataBlocks`?因为删除不需要纠删码解码,只要多数盘确认删除就行。
 
-### 元数据读取 Quorum (投票)
+### 元数据读取 `Quorum` (投票)
 
 读取元数据时,`readMeta` 从所有盘并行读取,然后通过投票选出"正确"的版本:
 
@@ -456,20 +456,20 @@ func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
 投票的逻辑是这样的:把每份元数据按 `(ETag, ModTime)` 分组计数,出现次数最多的那个就是"正确"版本。
 
 举个例子,6 块盘的情况:
-- disk0: ETag="abc", ModTime=T1
-- disk1: ETag="abc", ModTime=T1
-- disk2: ETag="def", ModTime=T2 (这块盘的数据可能过时了)
-- disk3: ETag="abc", ModTime=T1
-- disk4: ETag="abc", ModTime=T1
-- disk5: ETag="abc", ModTime=T1
+- disk0: `ETag`="abc", `ModTime`=T1
+- disk1: `ETag`="abc", `ModTime`=T1
+- disk2: `ETag`="def", `ModTime`=T2 (这块盘的数据可能过时了)
+- disk3: `ETag`="abc", `ModTime`=T1
+- disk4: `ETag`="abc", `ModTime`=T1
+- disk5: `ETag`="abc", `ModTime`=T1
 
-ETag="abc" 出现 5 次,ETag="def" 只出现 1 次。选 abc。
+`ETag`="abc" 出现 5 次,`ETag`="def" 只出现 1 次。选 abc。
 
 这个投票机制能容忍少数盘的数据不一致,但有个前提:正确版本的数量必须超过半数。如果出现 3:3 的平票,结果就是不确定的(取决于遍历顺序)。在实际生产中,这种情况需要更复杂的处理(比如结合写入时间戳),但 mini-minio 没有做这个。
 
-## 6.7 Write-then-Rename
+## 6.7 `write-then-rename`
 
-mini-minio 写入元数据用的是 Write-then-Rename 模式:先把元数据写到临时文件,满足 Quorum 后再原子重命名为最终文件。
+mini-minio 写入元数据用的是 `write-then-rename` 模式:先把元数据写到临时文件,满足 `Quorum` 后再原子重命名为最终文件。
 
 ```go
 // cmd/erasure-object.go:317
@@ -496,7 +496,7 @@ wg.Wait()
 
 所有盘并行写临时文件。每个盘写完后返回临时文件路径。如果某块盘写失败了,`tmpPaths[idx]` 就是空字符串,后续的重命名会跳过它。
 
-写入完成后检查 Quorum,满足了才做重命名:
+写入完成后检查 `Quorum`,满足了才做重命名:
 
 ```go
 // cmd/erasure-object.go:353
@@ -526,11 +526,11 @@ renameWg.Wait()
 1. 创建纠删码编码器 `erasure.New(dataBlocks, parityBlocks, pool)`
 2. 为每块盘创建分片文件 `disk.CreateShardFile(bucket, object, dataDir, 1)`
 3. 从缓冲池获取缓冲区
-4. 用 `io.TeeReader` 包装数据流,一边编码一边算 MD5
+4. 用 `io.TeeReader` 包装数据流,一边编码一边算 `MD5`
 5. 调用 `enc.Encode` 流式编码,数据写入所有盘的分片文件
 6. 关闭所有分片文件
 7. 构造 `xlMeta` 元数据
-8. Write-then-Rename 写入元数据
+8. `write-then-rename` 写入元数据
 
 ```go
 // cmd/erasure-object.go:251
@@ -586,7 +586,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 }
 ```
 
-`dataDir` 是一个 UUID,用于标识这次写入的数据目录。每块盘上会创建 `{bucket}/{object}/{dataDir}/part.1` 这样的分片文件。`enc.Encode` 是流式编码,边读边写,不需要把整个对象加载到内存里。
+`dataDir` 是一个 `UUID`,用于标识这次写入的数据目录。每块盘上会创建 `{bucket}/{object}/{dataDir}/part.1` 这样的分片文件。`enc.Encode` 是流式编码,边读边写,不需要把整个对象加载到内存里。
 
 ### 读取流程
 
@@ -652,7 +652,7 @@ func (e *erasureObjects) GetObjectNInfo(
 }
 ```
 
-这里用了 `io.Pipe` 实现流式解码:一个 goroutine 负责解码并写入 pipe 的写端,调用方从 pipe 的读端读数据。这样整个解码过程是流式的,不需要把整个对象解码到内存里。
+这里用了 `io.Pipe` 实现流式解码:一个 `goroutine` 负责解码并写入 pipe 的写端,调用方从 pipe 的读端读数据。这样整个解码过程是流式的,不需要把整个对象解码到内存里。
 
 解码器(`enc.Decode`)接受一个 `offset` 和 `length`,支持只解码对象的一部分。这就是 Range 请求能高效工作的基础--纠删码引擎会跳过不需要的数据块,只解码目标范围。
 
@@ -660,7 +660,7 @@ func (e *erasureObjects) GetObjectNInfo(
 
 ## 6.9 并行 I/O 与缓冲池
 
-mini-minio 的所有磁盘操作都是并行的。PutObject 写数据、写元数据、重命名,readMeta 读元数据,DeleteObject 删除数据--都是用 `sync.WaitGroup` + goroutine 并行执行:
+mini-minio 的所有磁盘操作都是并行的。PutObject 写数据、写元数据、重命名,readMeta 读元数据,DeleteObject 删除数据--都是用 `sync.WaitGroup` + `goroutine` 并行执行:
 
 ```go
 var wg sync.WaitGroup
@@ -739,9 +739,9 @@ mini-minio 用的是 `sync.RWMutex`--本地互斥锁,只在单进程内有效。
 
 mini-minio 没有自愈。磁盘上的数据坏了就是坏了,除非手动修复。在 4+2 配置下,可以容忍 2 块盘同时出问题;超过 2 块,数据就丢了。
 
-### Quorum 实现
+### `Quorum` 实现
 
-原版的 Quorum 更精细:
+原版的 `Quorum` 更精细:
 
 ```go
 // 原版 MinIO 的 Quorum 处理
@@ -756,7 +756,7 @@ func reduceWriteQuorumErrs(errs []error, quorum int, total int) error {
 
 ### 错误处理
 
-原版有精细的错误分类:`errFileNotFound`、`errFileAccessDenied`、`errFileVersionNotFound`、`errDiskFull` 等,每种错误对应不同的 HTTP 状态码和 S3 错误码。
+原版有精细的错误分类:`errFileNotFound`、`errFileAccessDenied`、`errFileVersionNotFound`、`errDiskFull` 等,每种错误对应不同的 `HTTP` 状态码和 `S3` 错误码。
 
 mini-minio 只有四个自定义错误:
 

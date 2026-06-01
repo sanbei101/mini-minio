@@ -1,19 +1,19 @@
-# 第1章: S3 协议基础
+# 第1章: `S3` 协议基础
 
-## 1.1 S3 协议是什么
+## 1.1 `S3` 协议是什么
 
-Amazon S3 (Simple Storage Service) 是 AWS 提供的对象存储服务,它定义了一套标准的 RESTful API 来管理对象(也就是文件)。mini-minio 要做的事就是把这套 API 的核心子集实现出来。
+Amazon `S3` (Simple Storage Service) 是 `AWS` 提供的对象存储服务,它定义了一套标准的 `RESTful API` 来管理对象(也就是文件)。mini-minio 要做的事就是把这套 API 的核心子集实现出来。
 
-S3 的核心思想其实挺简单的,就三个东西:
+`S3` 的核心思想其实挺简单的,就三个东西:
 - **Bucket**: 命名空间,你可以把它理解成文件系统的根目录
-- **Object**: 存储的基本单位,由 Key(路径) + Data(数据) + Metadata(元信息) 组成
-- **Key**: 对象在 Bucket 中的唯一标识,支持 `/` 分隔符来模拟目录结构
+- **Object**: 存储的基本单位,由 `Key`(路径) + Data(数据) + Metadata(元信息) 组成
+- **Key**: 对象在 `Bucket` 中的唯一标识,支持 `/` 分隔符来模拟目录结构
 
-## 1.2 Bucket、Object、Key 到底长什么样
+## 1.2 `Bucket`、`Object`、`Key` 到底长什么样
 
-### Bucket
+### `Bucket`
 
-Bucket 是对象的容器。在 `mini-minio` 中,每个 Bucket 对应每块磁盘上的一个目录:
+`Bucket` 是对象的容器。在 `mini-minio` 中,每个 `Bucket` 对应每块磁盘上的一个目录:
 
 ```
 /disk1/my-bucket/
@@ -34,15 +34,15 @@ if len(diskPaths) == 0 || len(diskPaths)%setDriveCount != 0 {
 }
 ```
 
-Bucket 的命名规则:
+`Bucket` 的命名规则:
 - 全局唯一
 - 3-63 个字符
 - 只能包含小写字母、数字和连字符
 - 不能以连字符开头或结尾
 
-### Object
+### `Object`
 
-Object 的存储结构是这样的:
+`Object` 的存储结构是这样的:
 
 ```
 my-bucket/
@@ -55,7 +55,7 @@ my-bucket/
                     └── part.1       # 数据分片
 ```
 
-这里有个细节: `xl.meta` 在 `mini-minio` 中用的是 JSON 格式,而不是原版 MinIO 的 MessagePack 二进制格式。每块磁盘上都会写一份 `xl.meta`,里面记录了对象的名字、大小、ETag、数据目录 UUID、纠删码配置等信息:
+这里有个细节: `xl.meta` 在 `mini-minio` 中用的是 `JSON` 格式,而不是原版 MinIO 的 `MessagePack` 二进制格式。每块磁盘上都会写一份 `xl.meta`,里面记录了对象的名字、大小、`ETag`、数据目录 `UUID`、纠删码配置等信息:
 
 ```go
 // erasure-object.go
@@ -75,15 +75,15 @@ type xlMeta struct {
 }
 ```
 
-数据文件放在 `DataDir` (一个 UUID 目录) 下面,文件名是 `part.1`、`part.2` 这样递增的。不过 `mini-minio` 目前只支持单 part,所以基本只会看到 `part.1`。
+数据文件放在 `DataDir` (一个 `UUID` 目录) 下面,文件名是 `part.1`、`part.2` 这样递增的。不过 `mini-minio` 目前只支持单 part,所以基本只会看到 `part.1`。
 
-### Key
+### `Key`
 
-Key 就是对象的路径,比如 `photos/2024/01/image.jpg`。在同一个 Bucket 内 Key 是唯一的,区分大小写,最大 1024 字节。
+`Key` 就是对象的路径,比如 `photos/2024/01/image.jpg`。在同一个 `Bucket` 内 `Key` 是唯一的,区分大小写,最大 1024 字节。
 
-## 1.3 认证: SigV4 签名怎么玩
+## 1.3 认证: `SigV4` 签名怎么玩
 
-S3 用 AWS Signature Version 4 做请求认证。mini-minio 支持两种认证方式,由 `authMiddleware` 统一处理:
+`S3` 用 `AWS` Signature Version 4 做请求认证。mini-minio 支持两种认证方式,由 `authMiddleware` 统一处理:
 
 ```go
 // api-handlers.go
@@ -111,11 +111,11 @@ func authMiddleware(creds Credentials, next http.Handler) http.Handler {
 }
 ```
 
-如果没配置 AccessKey (空字符串),认证中间件会直接跳过,这对本地开发测试很方便。
+如果没配置 `AccessKey` (空字符串),认证中间件会直接跳过,这对本地开发测试很方便。
 
 ### Header 认证
 
-普通的 HTTP 请求把签名放在 `Authorization` 头里:
+普通的 `HTTP` 请求把签名放在 `Authorization` 头里:
 
 ```http
 GET /my-bucket/my-object HTTP/1.1
@@ -123,15 +123,15 @@ Host: minio.example.com
 Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20240101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=1234567890abcdef
 ```
 
-### Presigned URL
+### `Presigned URL`
 
-Presigned URL 把签名放在查询参数里,这样任何人拿到这个 URL 就可以直接访问,不需要额外的认证:
+`Presigned URL` 把签名放在查询参数里,这样任何人拿到这个 URL 就可以直接访问,不需要额外的认证:
 
 ```
 https://minio.example.com/my-bucket/my-object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...&X-Amz-Expires=3600&X-Amz-Signature=...
 ```
 
-`mini-minio` 生成 Presigned URL 的代码很直接:
+`mini-minio` 生成 `Presigned URL` 的代码很直接:
 
 ```go
 // signature-v4.go
@@ -152,11 +152,11 @@ func PresignURL(baseURL, method, bucket, object, accessKey, secretKey string, ex
 
 ### 签名验证的完整流程
 
-不管是 Header 认证还是 Presigned URL,验证逻辑都一样,分四步:
+不管是 Header 认证还是 `Presigned URL`,验证逻辑都一样,分四步:
 
 **第一步: 构建 Canonical Request**
 
-把 HTTP 请求的各个部分按固定格式拼起来:
+把 `HTTP` 请求的各个部分按固定格式拼起来:
 
 ```
 CanonicalRequest =
@@ -181,7 +181,7 @@ canonReq := strings.Join([]string{
 }, "\n")
 ```
 
-这里的 `canonicalQueryString` 会对查询参数按字母序排序并 URL 编码。对于 Presigned URL,签名参数 `X-Amz-Signature` 会被排除在外(通过 `excludeSig` 参数控制)。
+这里的 `canonicalQueryString` 会对查询参数按字母序排序并 URL 编码。对于 `Presigned URL`,签名参数 `X-Amz-Signature` 会被排除在外(通过 `excludeSig` 参数控制)。
 
 **第二步: 创建 String to Sign**
 
@@ -195,7 +195,7 @@ StringToSign =
 
 **第三步: 计算签名密钥**
 
-通过四层 HMAC-SHA256 派生:
+通过四层 `HMAC-SHA256` 派生:
 
 ```go
 // signature-v4.go
@@ -252,39 +252,39 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 }
 ```
 
-注意一个细节: Multipart 路由必须放在 Object 路由前面,因为 `mux` 的路由匹配是按注册顺序来的。`{object:.+}` 这个正则会贪婪匹配路径,如果 Object 路由在前面,`POST /bucket/key?uploads` 就会被当成普通的 Object 操作处理。
+注意一个细节: Multipart 路由必须放在 `Object` 路由前面,因为 `mux` 的路由匹配是按注册顺序来的。`{object:.+}` 这个正则会贪婪匹配路径,如果 `Object` 路由在前面,`POST /bucket/key?uploads` 就会被当成普通的 `Object` 操作处理。
 
-### Bucket 操作
+### `Bucket` 操作
 
-| 操作 | HTTP 方法 | 路径 | 说明 |
+| 操作 | `HTTP` 方法 | 路径 | 说明 |
 |------|-----------|------|------|
-| CreateBucket | PUT | /{bucket} | 创建 Bucket,成功返回 200 + Location 头 |
-| ListBuckets | GET | / | 列出所有 Bucket |
-| DeleteBucket | DELETE | /{bucket} | 删除 Bucket,成功返回 204 |
-| HeadBucket | HEAD | /{bucket} | 检查 Bucket 是否存在 |
-| ListObjects | GET | /{bucket} | 列出 Bucket 中的对象 (ListObjectsV2 接口) |
+| CreateBucket | PUT | /{bucket} | 创建 `Bucket`,成功返回 200 + Location 头 |
+| ListBuckets | GET | / | 列出所有 `Bucket` |
+| DeleteBucket | DELETE | /{bucket} | 删除 `Bucket`,成功返回 204 |
+| HeadBucket | HEAD | /{bucket} | 检查 `Bucket` 是否存在 |
+| ListObjects | GET | /{bucket} | 列出 `Bucket` 中的对象 (ListObjectsV2 接口) |
 
-### Object 操作
+### `Object` 操作
 
-| 操作 | HTTP 方法 | 路径 | 说明 |
+| 操作 | `HTTP` 方法 | 路径 | 说明 |
 |------|-----------|------|------|
-| PutObject | PUT | /{bucket}/{object} | 上传对象,返回 ETag |
-| GetObject | GET | /{bucket}/{object} | 下载对象,支持 Range 请求 |
+| PutObject | PUT | /{bucket}/{object} | 上传对象,返回 `ETag` |
+| GetObject | GET | /{bucket}/{object} | 下载对象,支持 `Range` 请求 |
 | DeleteObject | DELETE | /{bucket}/{object} | 删除对象,成功返回 204 |
 | HeadObject | HEAD | /{bucket}/{object} | 获取对象元信息 |
 
 ### Multipart 操作
 
-| 操作 | HTTP 方法 | 路径 | 说明 |
+| 操作 | `HTTP` 方法 | 路径 | 说明 |
 |------|-----------|------|------|
 | CreateMultipartUpload | POST | /{bucket}/{object}?uploads | 初始化分片上传,返回 UploadId |
-| UploadPart | PUT | /{bucket}/{object}?partNumber={n}&uploadId={id} | 上传分片,返回 ETag |
+| UploadPart | PUT | /{bucket}/{object}?partNumber={n}&uploadId={id} | 上传分片,返回 `ETag` |
 | CompleteMultipartUpload | POST | /{bucket}/{object}?uploadId={id} | 完成分片上传 |
 | AbortMultipartUpload | DELETE | /{bucket}/{object}?uploadId={id} | 中止分片上传 |
 
 ## 1.5 响应格式
 
-S3 API 用 XML 格式返回响应。mini-minio 通过 `writeXML` 和 `writeError` 两个辅助函数统一处理:
+`S3` API 用 `XML` 格式返回响应。mini-minio 通过 `writeXML` 和 `writeError` 两个辅助函数统一处理:
 
 ```go
 func writeXML(w http.ResponseWriter, status int, v any) {
@@ -304,7 +304,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 ```
 
-列出 Bucket 的响应:
+列出 `Bucket` 的响应:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -352,7 +352,7 @@ ListObjects 的响应比较复杂,包含了对象列表和公共前缀:
 
 ## 1.6 ObjectLayer: 核心抽象接口
 
-整个 `mini-minio` 的架构围绕 `ObjectLayer` 接口展开。HTTP handler 只负责解析请求和组装响应,所有存储逻辑都通过这个接口:
+整个 `mini-minio` 的架构围绕 `ObjectLayer` 接口展开。`HTTP` handler 只负责解析请求和组装响应,所有存储逻辑都通过这个接口:
 
 ```go
 // object-api-interface.go
@@ -375,7 +375,7 @@ type ObjectLayer interface {
 - `erasureSets`: 最外层,负责把对象路由到正确的 erasure set
 - `erasureObjects`: 每个 set 内部,负责实际的纠删码编码/解码和磁盘读写
 
-对象路由用的是 CRC32 哈希:
+对象路由用的是 `CRC32` 哈希:
 
 ```go
 // erasure-sets.go
@@ -385,9 +385,9 @@ func (s *erasureSets) setForObject(object string) *erasureObjects {
 }
 ```
 
-## 1.7 Multipart Upload 的实现
+## 1.7 `Multipart Upload` 的实现
 
-`mini-minio` 的 Multipart Upload 用的是内存存储,所有分片数据都存在一个全局的 map 里:
+`mini-minio` 的 `Multipart Upload` 用的是内存存储,所有分片数据都存在一个全局的 map 里:
 
 ```go
 // erasure-object.go
@@ -406,7 +406,7 @@ type multipartUpload struct {
 }
 ```
 
-CompleteMultipartUpload 时,把所有分片按顺序拼成一个完整的 io.Reader,然后调用 `PutObject` 走正常的纠删码写入流程:
+CompleteMultipartUpload 时,把所有分片按顺序拼成一个完整的 `io.Reader`,然后调用 `PutObject` 走正常的纠删码写入流程:
 
 ```go
 func completeMultipartUpload(ctx context.Context, ol ObjectLayer, uploadID string, partNumbers []int) (ObjectInfo, error) {
@@ -427,11 +427,11 @@ func completeMultipartUpload(ctx context.Context, ol ObjectLayer, uploadID strin
 
 ### API 覆盖范围
 
-原版 MinIO 实现了完整的 S3 API,包括版本控制、对象锁定、生命周期管理、事件通知、复制等等。mini-minio 只保留了最核心的部分:Bucket 的增删查、Object 的读写删、Multipart Upload 的基本流程、以及 Presigned URL。
+原版 MinIO 实现了完整的 `S3` API,包括版本控制、对象锁定、生命周期管理、事件通知、复制等等。mini-minio 只保留了最核心的部分:`Bucket` 的增删查、`Object` 的读写删、`Multipart Upload` 的基本流程、以及 `Presigned URL`。
 
 ### 认证机制
 
-原版 MinIO 支持 SigV4、SigV2 (兼容旧客户端)、STS、IAM、LDAP/AD、OpenID Connect 等多种认证方式。mini-minio 只实现了 SigV4,而且是单用户模式 -- 只有一对 AccessKey/SecretKey,存在 `Credentials` 结构体里:
+原版 MinIO 支持 `SigV4`、SigV2 (兼容旧客户端)、STS、IAM、LDAP/AD、OpenID Connect 等多种认证方式。mini-minio 只实现了 `SigV4`,而且是单用户模式 -- 只有一对 `AccessKey`/`SecretKey`,存在 `Credentials` 结构体里:
 
 ```go
 type Credentials struct {
