@@ -25,10 +25,10 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 
 	// Bucket-level
 	r.Methods("GET").Path("/").HandlerFunc(api.ListBuckets)
-	r.Methods("PUT").Path("/{bucket}").HandlerFunc(api.CreateBucket)
-	r.Methods("DELETE").Path("/{bucket}").HandlerFunc(api.DeleteBucket)
-	r.Methods("HEAD").Path("/{bucket}").HandlerFunc(api.HeadBucket)
-	r.Methods("GET").Path("/{bucket}").HandlerFunc(api.ListObjects)
+	r.Methods("PUT").Path("/{bucket}/").HandlerFunc(api.CreateBucket)
+	r.Methods("DELETE").Path("/{bucket}/").HandlerFunc(api.DeleteBucket)
+	r.Methods("HEAD").Path("/{bucket}/").HandlerFunc(api.HeadBucket)
+	r.Methods("GET").Path("/{bucket}/").HandlerFunc(api.ListObjects)
 
 	// Multipart
 	r.Methods("POST").Path("/{bucket}/{object:.+}").Queries("uploads", "").HandlerFunc(api.CreateMultipartUpload)
@@ -55,9 +55,35 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 	if creds.AccessKey == "" {
 		return r
 	}
-	return authMiddleware(creds, r)
+	return requestLoggingMiddleware(authMiddleware(creds, r))
 }
 
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (lrw *loggingResponseWriter) WriteHeader(code int) {
+	lrw.statusCode = code
+	lrw.ResponseWriter.WriteHeader(code)
+}
+
+func requestLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lrw := &loggingResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		start := time.Now()
+
+		next.ServeHTTP(lrw, r)
+
+		log.Info().
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
+			Str("query", r.URL.RawQuery).
+			Int("status", lrw.statusCode).
+			Dur("duration", time.Since(start)).
+			Msg("http request")
+	})
+}
 func authMiddleware(creds Credentials, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var err error

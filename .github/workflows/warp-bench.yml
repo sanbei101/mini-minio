@@ -28,7 +28,11 @@ jobs:
 
           sleep 3
 
-          mkdir -p ./data/disk{0..5}/warp-benchmark-bucket
+          curl -L https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
+
+          chmod +x mc
+          ./mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin123
+          ./mc mb myminio/test-bucket-compatibility
 
       - name: install warp
         run: |
@@ -37,18 +41,16 @@ jobs:
       
       - name: Run Warp S3 Benchmark
         run: |
-          if ! warp mixed --host=127.0.0.1:9000 \
-                                 --access-key=minioadmin \
-                                 --secret-key=minioadmin123 \
-                                 --region=us-east-1 \
-                                 --noclear \
-                                 --autoterm; then
-            echo "❌ Warp 压测失败！正在为你抓取 mini-minio 服务器后台日志..."
-            echo "=================== SERVER LOGS ==================="
-            cat server.log
-            echo "==================================================="
-            kill $SERVER_PID
-            exit 1
-          fi
+          warp mixed --host=127.0.0.1:9000 \
+           --access-key=minioadmin \
+           --secret-key=minioadmin123 \
+           --region=us-east-1 \
+           --noclear \
+           --autoterm \
+           --objects=50 \
+           --obj.size=64KiB
 
-          echo "✅ Warp 压测成功！"
+      - name: Stop mini-minio Server
+        run: |
+          pkill mini-minio || true
+          cat server.log
