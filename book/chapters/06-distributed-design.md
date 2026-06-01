@@ -85,7 +85,7 @@ func (s *erasureSets) setForObject(object string) *erasureObjects {
 }
 ```
 
-CRC32 哈希计算快,分布也还算均匀。同一个对象名总是路由到同一个 Set,这对数据一致性很重要——写入和读取必须走同一个 Set。
+CRC32 哈希计算快,分布也还算均匀。同一个对象名总是路由到同一个 Set,这对数据一致性很重要--写入和读取必须走同一个 Set。
 
 对象相关的操作全部委托给对应的 Set:
 
@@ -115,7 +115,7 @@ func (s *erasureSets) GetObjectInfo(ctx context.Context, bucket, object string) 
 
 ## 6.4 Bucket 操作
 
-Bucket 跟对象不一样——对象可以按名字哈希到某个 Set,但 Bucket 是全局的,必须在所有 Set 上都存在。
+Bucket 跟对象不一样--对象可以按名字哈希到某个 Set,但 Bucket 是全局的,必须在所有 Set 上都存在。
 
 ### CreateBucket
 
@@ -131,7 +131,7 @@ func (s *erasureSets) MakeBucket(ctx context.Context, bucket string) error {
 }
 ```
 
-遍历所有 Set,逐个创建。某个 Set 失败了就直接返回错误——这意味着可能会出现部分 Set 有这个 Bucket、部分没有的不一致状态。原版 MinIO 用分布式锁来避免这个问题,mini-minio 没有这个机制。
+遍历所有 Set,逐个创建。某个 Set 失败了就直接返回错误--这意味着可能会出现部分 Set 有这个 Bucket、部分没有的不一致状态。原版 MinIO 用分布式锁来避免这个问题,mini-minio 没有这个机制。
 
 ### DeleteBucket
 
@@ -213,7 +213,7 @@ func (s *erasureSets) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
 }
 ```
 
-从所有 Set 收集 Bucket 列表,按名字去重。去重时保留最早的创建时间——这能处理前面说的部分创建失败的情况。只有所有 Set 都失败了(`okSets == 0`)才返回错误,单个 Set 失败不影响整体结果。
+从所有 Set 收集 Bucket 列表,按名字去重。去重时保留最早的创建时间--这能处理前面说的部分创建失败的情况。只有所有 Set 都失败了(`okSets == 0`)才返回错误,单个 Set 失败不影响整体结果。
 
 ## 6.5 ListObjects
 
@@ -394,7 +394,7 @@ if successCount < writeQuorum {
 }
 ```
 
-删除用的是 `len(disks)/2 + 1`——简单多数。6 块盘需要 4 块删除成功。为什么不用 `dataBlocks`?因为删除不需要纠删码解码,只要多数盘确认删除就行。
+删除用的是 `len(disks)/2 + 1`--简单多数。6 块盘需要 4 块删除成功。为什么不用 `dataBlocks`?因为删除不需要纠删码解码,只要多数盘确认删除就行。
 
 ### 元数据读取 Quorum (投票)
 
@@ -654,13 +654,13 @@ func (e *erasureObjects) GetObjectNInfo(
 
 这里用了 `io.Pipe` 实现流式解码:一个 goroutine 负责解码并写入 pipe 的写端,调用方从 pipe 的读端读数据。这样整个解码过程是流式的,不需要把整个对象解码到内存里。
 
-解码器(`enc.Decode`)接受一个 `offset` 和 `length`,支持只解码对象的一部分。这就是 Range 请求能高效工作的基础——纠删码引擎会跳过不需要的数据块,只解码目标范围。
+解码器(`enc.Decode`)接受一个 `offset` 和 `length`,支持只解码对象的一部分。这就是 Range 请求能高效工作的基础--纠删码引擎会跳过不需要的数据块,只解码目标范围。
 
 注意 `readers` 数组里有些元素可能是 `nil`(某块盘的分片文件打开失败)。纠删码引擎能容忍最多 `parityBlocks` 块盘缺失。
 
 ## 6.9 并行 I/O 与缓冲池
 
-mini-minio 的所有磁盘操作都是并行的。PutObject 写数据、写元数据、重命名,readMeta 读元数据,DeleteObject 删除数据——都是用 `sync.WaitGroup` + goroutine 并行执行:
+mini-minio 的所有磁盘操作都是并行的。PutObject 写数据、写元数据、重命名,readMeta 读元数据,DeleteObject 删除数据--都是用 `sync.WaitGroup` + goroutine 并行执行:
 
 ```go
 var wg sync.WaitGroup
@@ -731,7 +731,7 @@ type Disk struct {
 
 原版 MinIO 用 `dsync` 库实现跨节点的分布式锁。MakeBucket、DeleteBucket 这类操作会先拿锁,防止并发冲突。`dsync` 支持锁超时、续期、死锁检测。
 
-mini-minio 用的是 `sync.RWMutex`——本地互斥锁,只在单进程内有效。如果部署多个 mini-minio 实例(虽然目前不支持),这个锁就不够用了。
+mini-minio 用的是 `sync.RWMutex`--本地互斥锁,只在单进程内有效。如果部署多个 mini-minio 实例(虽然目前不支持),这个锁就不够用了。
 
 ### 自愈机制
 

@@ -294,7 +294,7 @@ func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error 
 }
 ```
 
-同样要求所有磁盘都成功。如果某个盘上 bucket 已经不存在了(可能之前已经删过),也没关系,`os.IsNotExist` 的错误会被忽略。这种幂等性设计在分布式系统里很重要——客户端重试请求时不会因为"已经删过了"而报错。
+同样要求所有磁盘都成功。如果某个盘上 bucket 已经不存在了(可能之前已经删过),也没关系,`os.IsNotExist` 的错误会被忽略。这种幂等性设计在分布式系统里很重要--客户端重试请求时不会因为"已经删过了"而报错。
 
 底层的 `Disk.DeleteBucket` 用的是 `os.Remove`,这个函数只能删除**空目录**。如果 bucket 下还有对象,会返回 `ENOTEMPTY` 错误。这意味着在 mini-minio 里,你不能删除一个非空的 bucket,必须先把里面的东西删干净。
 
@@ -361,7 +361,7 @@ func (e *erasureObjects) statBucket(bucket string) (os.FileInfo, error) {
 }
 ```
 
-它是**顺序遍历**,不是并行。原因是 stat 操作本身很快(就是 `os.Stat`),没必要开 goroutine。而且它的逻辑是"找到就返回"——只要有一块盘上存在这个 bucket,直接返回成功。
+它是**顺序遍历**,不是并行。原因是 stat 操作本身很快(就是 `os.Stat`),没必要开 goroutine。而且它的逻辑是"找到就返回"--只要有一块盘上存在这个 bucket,直接返回成功。
 
 错误处理也值得注意:它区分了 `ErrNotFound` 和其他错误。如果某块盘返回的是"找不到"(可能是那块盘坏了),会继续检查下一块盘。但如果返回的是其他错误(比如 IO 错误),会优先返回这个错误,而不是继续检查。这是因为 IO 错误可能意味着更严重的问题。
 
@@ -394,13 +394,13 @@ type erasureObjects struct {
 }
 ```
 
-但并不是所有 bucket 操作都用它。只有**写操作**(MakeBucket、DeleteBucket)会获取写锁,读操作(ListBuckets、GetBucketInfo)完全没有用锁。这在并发安全上其实有点冒险——如果在 ListBuckets 执行的同时有 MakeBucket 在跑,理论上可能读到不一致的状态。不过在 mini-minio 的简化场景下,这种竞态条件的影响可以忽略。
+但并不是所有 bucket 操作都用它。只有**写操作**(MakeBucket、DeleteBucket)会获取写锁,读操作(ListBuckets、GetBucketInfo)完全没有用锁。这在并发安全上其实有点冒险--如果在 ListBuckets 执行的同时有 MakeBucket 在跑,理论上可能读到不一致的状态。不过在 mini-minio 的简化场景下,这种竞态条件的影响可以忽略。
 
 ## 3.8 和原版 MinIO 的差异
 
 ### 架构层次
 
-原版 MinIO 的 bucket 操作要经过好几层: `erasureServerPools -> s3Peer -> erasureSets -> erasureObjects`。每一层都有自己的职责——`erasureServerPools` 管理多个服务器池,`s3Peer` 处理分布式节点间的通信,`erasureSets` 管理纠删码集合。mini-minio 把这些全部砍掉了,只保留了两层: `erasureObjects -> storage.Disk`。
+原版 MinIO 的 bucket 操作要经过好几层: `erasureServerPools -> s3Peer -> erasureSets -> erasureObjects`。每一层都有自己的职责--`erasureServerPools` 管理多个服务器池,`s3Peer` 处理分布式节点间的通信,`erasureSets` 管理纠删码集合。mini-minio 把这些全部砍掉了,只保留了两层: `erasureObjects -> storage.Disk`。
 
 ### 分布式锁 vs 本地锁
 
@@ -466,4 +466,4 @@ mini-minio 没有这个检查,直接调用 `os.Remove`。如果目录非空,`os.
 - **ListBuckets**: 并行读取所有磁盘,做去重和排序,只要有一块盘成功就行
 - **HeadBucket**: 顺序遍历磁盘,找到就返回,不需要加锁
 
-写操作用的是"全量成功"策略,读操作用的是"尽量可用"策略。这种不对称的设计在分布式存储里很常见——写操作要保证数据一致性,读操作要保证可用性。
+写操作用的是"全量成功"策略,读操作用的是"尽量可用"策略。这种不对称的设计在分布式存储里很常见--写操作要保证数据一致性,读操作要保证可用性。

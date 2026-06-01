@@ -2,7 +2,7 @@
 
 ## 5.1 Multipart Upload (分片上传)
 
-大文件上传是个老大难的问题——网络抖动一下,前面传的就全白费了。分片上传就是为了解决这个痛点:把大文件拆成小块,一块一块传,最后再合起来。
+大文件上传是个老大难的问题--网络抖动一下,前面传的就全白费了。分片上传就是为了解决这个痛点:把大文件拆成小块,一块一块传,最后再合起来。
 
 mini-minio 的分片上传用的是纯内存方案。所有分片数据存在 `map` 里,完成时拼到一起调 `PutObject` 写盘。这个方案简单粗暴,但对学习来说够用了。
 
@@ -25,7 +25,7 @@ var (
 )
 ```
 
-两个 `map` 用 `sync.Mutex` 保护。外层的 `multipartMu` 保护全局的 `multipartUploads` map,内层的 `mu` 保护单次上传的 `parts` 和 `etags`。这个双层锁的设计粒度还算合理——查找上传用全局锁,读写分片数据用单次上传的锁。
+两个 `map` 用 `sync.Mutex` 保护。外层的 `multipartMu` 保护全局的 `multipartUploads` map,内层的 `mu` 保护单次上传的 `parts` 和 `etags`。这个双层锁的设计粒度还算合理--查找上传用全局锁,读写分片数据用单次上传的锁。
 
 ### CreateMultipartUpload
 
@@ -222,7 +222,7 @@ func completeMultipartUpload(
 }
 ```
 
-拼接用的是 `bytes.Buffer`——所有分片数据会在内存里再复制一份。如果一个 1GB 的文件分了 100 个 10MB 的片,这里会临时占用大约 2GB 内存(分片数据 + Buffer 拼接)。写入成功后,立即从 map 中删除这次上传,释放内存。
+拼接用的是 `bytes.Buffer`--所有分片数据会在内存里再复制一份。如果一个 1GB 的文件分了 100 个 10MB 的片,这里会临时占用大约 2GB 内存(分片数据 + Buffer 拼接)。写入成功后,立即从 map 中删除这次上传,释放内存。
 
 ### AbortMultipartUpload
 
@@ -246,7 +246,7 @@ func abortMultipartUpload(uploadID string) {
 }
 ```
 
-注意这里不管 uploadID 是否存在都会返回 204。这是符合 S3 规范的——Abort 本身就是幂等的,不存在就算成功了。
+注意这里不管 uploadID 是否存在都会返回 204。这是符合 S3 规范的--Abort 本身就是幂等的,不存在就算成功了。
 
 ### 与原版的差距
 
@@ -406,7 +406,7 @@ func verifyPresignedAuth(r *http.Request, creds Credentials) error {
 几个值得留意的细节:
 
 - **过期检查**: `X-Amz-Expires` 的值是秒数,代码用 `time.ParseDuration(value + "s")` 拼上 "s" 后缀转成 `time.Duration`,然后跟 `time.Since(t)` 比较。超过有效期直接拒绝。
-- **查询参数排序**: 调用 `canonicalQueryString(q, true)` 时第二个参数 `true` 表示排除 `X-Amz-Signature` 本身——签名计算当然不能把自己也算进去。
+- **查询参数排序**: 调用 `canonicalQueryString(q, true)` 时第二个参数 `true` 表示排除 `X-Amz-Signature` 本身--签名计算当然不能把自己也算进去。
 - **常量时间比较**: 用 `subtle.ConstantTimeCompare` 而不是 `==` 来比对签名,防止时序攻击。
 - **host 头处理**: `host` 不在 `r.Header` 里(它是 HTTP/1.1 的特殊头),所以需要从 `r.Host` 单独取。
 
@@ -470,7 +470,7 @@ func canonicalHeaders(h http.Header, signed []string) (canonical, signedStr stri
         lk := strings.ToLower(k)
         m[lk] = strings.TrimSpace(h.Get(k))
     }
-    // host is special — not in r.Header
+    // host is special - not in r.Header
     keys := make([]string, 0, len(m))
     for k := range m {
         keys = append(keys, k)
@@ -487,7 +487,7 @@ func canonicalHeaders(h http.Header, signed []string) (canonical, signedStr stri
 }
 ```
 
-注释里提到 `host is special — not in r.Header`——Go 的 `http.Header.Get("Host")` 拿不到值,所以调用方需要把 `r.Host` 手动塞进去。
+注释里提到 `host is special - not in r.Header`--Go 的 `http.Header.Get("Host")` 拿不到值,所以调用方需要把 `r.Host` 手动塞进去。
 
 ### Authorization Header 认证
 
@@ -604,7 +604,7 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 }
 ```
 
-路由用的是 `gorilla/mux`。注意 multipart 相关的路由靠 `Queries` 条件区分——同一个 `POST /{bucket}/{object:.+}` 路径,带 `uploads` 参数的是 `CreateMultipartUpload`,带 `uploadId` 参数的是 `CompleteMultipartUpload`。
+路由用的是 `gorilla/mux`。注意 multipart 相关的路由靠 `Queries` 条件区分--同一个 `POST /{bucket}/{object:.+}` 路径,带 `uploads` 参数的是 `CreateMultipartUpload`,带 `uploadId` 参数的是 `CompleteMultipartUpload`。
 
 ### 错误响应
 
@@ -632,9 +632,9 @@ Range 下载允许客户端只下载对象的一部分。视频播放器拖进�
 
 S3 支持三种 Range 写法:
 
-- `bytes=0-499` — 前 500 字节(闭区间,所以是 0 到 499)
-- `bytes=500-` — 从第 500 字节到结尾
-- `bytes=-500` — 最后 500 字节
+- `bytes=0-499` - 前 500 字节(闭区间,所以是 0 到 499)
+- `bytes=500-` - 从第 500 字节到结尾
+- `bytes=-500` - 最后 500 字节
 
 ### HTTPRangeSpec 结构
 
@@ -730,7 +730,7 @@ if rs != nil {
 
 `Content-Range` 的格式是 `bytes {start}-{end}/{total}`。注意 `Content-Length` 设置的是实际传输的字节数(length),不是对象的总大小。
 
-Range 的实际解码在纠删码层完成——`GetObjectNInfo` 把 offset 和 length 传给 `enc.Decode`,纠删码引擎只解码需要的那部分数据,而不是把整个文件解码出来再截取。这对大文件的随机读很重要。
+Range 的实际解码在纠删码层完成--`GetObjectNInfo` 把 offset 和 length 传给 `enc.Decode`,纠删码引擎只解码需要的那部分数据,而不是把整个文件解码出来再截取。这对大文件的随机读很重要。
 
 ## 5.4 与原版 MinIO 的对比
 
@@ -770,4 +770,4 @@ mini-minio 只支持单个 Range 请求,不支持条件请求。但单 Range 已
 
 原版 MinIO 的认证体系非常庞大:SigV4、SigV2(兼容旧客户端)、STS、IAM、LDAP/AD、OpenID Connect、多租户、匿名访问、细粒度权限控制。
 
-mini-minio 只实现了 SigV4 的 Header 认证和预签名认证,加上"无凭证时跳过认证"的匿名模式。对于学习目的来说,这就够了——核心的签名算法和验证流程都在。
+mini-minio 只实现了 SigV4 的 Header 认证和预签名认证,加上"无凭证时跳过认证"的匿名模式。对于学习目的来说,这就够了--核心的签名算法和验证流程都在。

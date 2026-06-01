@@ -75,7 +75,7 @@ type ListObjectsV2Info struct {
 }
 ```
 
-`IsTruncated` 表示结果是否被截断(还有更多对象没返回),`NextContinuationToken` 是下次请求的分页标记。`Prefixes` 用于目录模拟——当设置了 delimiter 时,公共前缀会被收集到这里。
+`IsTruncated` 表示结果是否被截断(还有更多对象没返回),`NextContinuationToken` 是下次请求的分页标记。`Prefixes` 用于目录模拟--当设置了 delimiter 时,公共前缀会被收集到这里。
 
 ### HTTPRangeSpec
 
@@ -275,11 +275,11 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 
 **缓冲池**: 纠删码编码需要一个 `BlockSize` 大小的缓冲区(10 MiB)。每次都分配这么大的 slice 会产生不少 GC 压力,所以用 `bpool.BytePoolCap` 做了缓冲池复用。如果池子里没有可用的缓冲区,才 fallback 到直接分配。
 
-**MD5 计算**: 用 `io.TeeReader` 包了一层,数据在流向纠删码编码器的同时,也在计算 MD5。编码完成后直接取 MD5 值作为 ETag。这个 ETag 和 S3 的行为一致——就是整个对象的 MD5。
+**MD5 计算**: 用 `io.TeeReader` 包了一层,数据在流向纠删码编码器的同时,也在计算 MD5。编码完成后直接取 MD5 值作为 ETag。这个 ETag 和 S3 的行为一致--就是整个对象的 MD5。
 
 **Write Quorum**: `writeQuorum` 的计算逻辑是 `dataBlocks`,但如果 `dataBlocks == parityBlocks` 则加 1。举个例子,4+4 配置下 writeQuorum 是 5,4+2 配置下 writeQuorum 是 4。这个设计保证了即使有 parityBlocks 块磁盘损坏,仍然有足够的数据可以恢复。
 
-**Write-then-Rename**: 元数据写入分两步——先写到 `xl.meta.tmp` 临时文件,检查 Quorum 通过后,再原子性重命名为 `xl.meta`。这样可以防止写到一半崩溃导致元数据损坏。如果写临时文件就失败了,会清理掉所有已写的临时文件。
+**Write-then-Rename**: 元数据写入分两步--先写到 `xl.meta.tmp` 临时文件,检查 Quorum 通过后,再原子性重命名为 `xl.meta`。这样可以防止写到一半崩溃导致元数据损坏。如果写临时文件就失败了,会清理掉所有已写的临时文件。
 
 底层的三个磁盘操作:
 
@@ -470,7 +470,7 @@ func (e *erasureObjects) GetObjectNInfo(
 }
 ```
 
-这里面最巧妙的设计是 **io.Pipe 模式**。`GetObjectNInfo` 返回的不是一个已经解码好的数据,而是一个 Pipe 的读端。真正的解码在 goroutine 里异步进行——HTTP handler 调用 `io.Copy(w, objReader)` 时,才会通过 Pipe 驱动 goroutine 里的解码过程。这样整个数据流是流式的,不需要把整个对象缓冲到内存里。
+这里面最巧妙的设计是 **io.Pipe 模式**。`GetObjectNInfo` 返回的不是一个已经解码好的数据,而是一个 Pipe 的读端。真正的解码在 goroutine 里异步进行--HTTP handler 调用 `io.Copy(w, objReader)` 时,才会通过 Pipe 驱动 goroutine 里的解码过程。这样整个数据流是流式的,不需要把整个对象缓冲到内存里。
 
 文件关闭也在 goroutine 里完成,因为解码没结束之前文件不能关。
 
@@ -531,7 +531,7 @@ func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
 
 投票逻辑:并行从所有磁盘读取 `xl.meta`,然后按 `ETag + ModTime` 组合作为 key 来计数。出现次数最多的那份元数据就是"正确"的版本。如果某个磁盘的 `xl.meta` 读不出来(比如磁盘离线),对应的 metas[i] 就是 nil,会被跳过。
 
-这种投票机制比简单的"取第一个成功"要靠谱——即使某块磁盘上的元数据被意外损坏了(和大多数不一致),也能被正确识别出来。
+这种投票机制比简单的"取第一个成功"要靠谱--即使某块磁盘上的元数据被意外损坏了(和大多数不一致),也能被正确识别出来。
 
 ### Range 请求解析
 
@@ -690,11 +690,11 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 
 和 DeleteBucket 不同的地方:
 
-**先查后删**: DeleteObject 会先调用 `GetObjectInfo` 确认对象存在,然后把对象信息返回给调用者。这和 S3 的行为一致——删除成功后返回被删除对象的元信息。
+**先查后删**: DeleteObject 会先调用 `GetObjectInfo` 确认对象存在,然后把对象信息返回给调用者。这和 S3 的行为一致--删除成功后返回被删除对象的元信息。
 
 **上下文取消**: 这里用了一个比较巧妙的方式来支持 context 取消。它把 `wg.Wait()` 放到一个单独的 goroutine 里,然后用 `select` 同时监听 `ctx.Done()` 和 `done` channel。如果客户端取消了请求(比如断开连接),可以尽快返回,不用等所有磁盘都删完。
 
-**Quorum 检查**: 删除成功的磁盘数必须 >= `len(disks)/2 + 1`。这和 PutObject 的 writeQuorum 计算方式不一样——PutObject 用的是 `dataBlocks`,DeleteObject 用的是简单多数。为什么不一样?因为删除操作不需要纠删码,只需要保证"大多数"磁盘删除成功就行。
+**Quorum 检查**: 删除成功的磁盘数必须 >= `len(disks)/2 + 1`。这和 PutObject 的 writeQuorum 计算方式不一样--PutObject 用的是 `dataBlocks`,DeleteObject 用的是简单多数。为什么不一样?因为删除操作不需要纠删码,只需要保证"大多数"磁盘删除成功就行。
 
 **错误日志**: 每块失败的磁盘都会记录一条错误日志,包含磁盘索引,方便排查问题。
 
@@ -784,7 +784,7 @@ func (a *apiHandlers) ListObjects(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-XML 响应里的 `CommonPrefixes` 是目录模拟的关键——当设置了 delimiter(比如 `/`)时,`photos/2024/cat.jpg` 这种路径会产生一个公共前缀 `photos/2024/`,放在 CommonPrefixes 里,而不是放在 Contents 里。这样客户端就像在浏览文件系统的目录一样。
+XML 响应里的 `CommonPrefixes` 是目录模拟的关键--当设置了 delimiter(比如 `/`)时,`photos/2024/cat.jpg` 这种路径会产生一个公共前缀 `photos/2024/`,放在 CommonPrefixes 里,而不是放在 Contents 里。这样客户端就像在浏览文件系统的目录一样。
 
 核心实现分两层: `ListObjectsV2` 负责分页和目录模拟,`listObjectNames` 负责从磁盘收集对象名称。
 
@@ -1269,7 +1269,7 @@ func abortMultipartUpload(uploadID string) {
 
 ### MultipartUpload
 
-原版 MinIO 的分片数据直接写到磁盘,每个分片是独立的 part 文件。mini-minio 把分片全部存在内存里,合并时拼成一个完整的对象再走 PutObject。这是 mini-minio 目前最大的简化之一——上传大文件时内存占用会很高。
+原版 MinIO 的分片数据直接写到磁盘,每个分片是独立的 part 文件。mini-minio 把分片全部存在内存里,合并时拼成一个完整的对象再走 PutObject。这是 mini-minio 目前最大的简化之一--上传大文件时内存占用会很高。
 
 ## 4.10 回顾一下
 

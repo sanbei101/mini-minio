@@ -1,4 +1,20 @@
-# <<从0开始构建一个mini-minio>>
+---
+layout: home
+
+hero:
+  name: "Mini-Minio"
+  text: "从0开始构建一个简化版的minio"
+  tagline: "深入浅出,一步步实现一个简化版的 MinIO 对象存储系统,帮助你理解其核心设计与实现原理。"
+  actions:
+    - theme: brand
+      text: 开始阅读
+      link: /chapters/01-s3-protocol
+    - theme: alt
+      text: GitHub 源码
+      link: https://github.com/sanbei101/mini-minio
+---
+
+# 从0开始构建一个mini-minio
 
 ## 简介
 

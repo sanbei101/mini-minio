@@ -13,7 +13,7 @@ S3 的核心思想其实挺简单的,就三个东西:
 
 ### Bucket
 
-Bucket 是对象的容器。在 mini-minio 中,每个 Bucket 对应每块磁盘上的一个目录:
+Bucket 是对象的容器。在 `mini-minio` 中,每个 Bucket 对应每块磁盘上的一个目录:
 
 ```
 /disk1/my-bucket/
@@ -55,7 +55,7 @@ my-bucket/
                     └── part.1       # 数据分片
 ```
 
-这里有个细节: `xl.meta` 在 mini-minio 中用的是 JSON 格式,而不是原版 MinIO 的 MessagePack 二进制格式。每块磁盘上都会写一份 `xl.meta`,里面记录了对象的名字、大小、ETag、数据目录 UUID、纠删码配置等信息:
+这里有个细节: `xl.meta` 在 `mini-minio` 中用的是 JSON 格式,而不是原版 MinIO 的 MessagePack 二进制格式。每块磁盘上都会写一份 `xl.meta`,里面记录了对象的名字、大小、ETag、数据目录 UUID、纠删码配置等信息:
 
 ```go
 // erasure-object.go
@@ -75,7 +75,7 @@ type xlMeta struct {
 }
 ```
 
-数据文件放在 `DataDir` (一个 UUID 目录) 下面,文件名是 `part.1`、`part.2` 这样递增的。不过 mini-minio 目前只支持单 part,所以基本只会看到 `part.1`。
+数据文件放在 `DataDir` (一个 UUID 目录) 下面,文件名是 `part.1`、`part.2` 这样递增的。不过 `mini-minio` 目前只支持单 part,所以基本只会看到 `part.1`。
 
 ### Key
 
@@ -131,7 +131,7 @@ Presigned URL 把签名放在查询参数里,这样任何人拿到这个 URL 就
 https://minio.example.com/my-bucket/my-object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=...&X-Amz-Expires=3600&X-Amz-Signature=...
 ```
 
-mini-minio 生成 Presigned URL 的代码很直接:
+`mini-minio` 生成 Presigned URL 的代码很直接:
 
 ```go
 // signature-v4.go
@@ -168,7 +168,7 @@ CanonicalRequest =
   HexEncode(Hash(RequestPayload))
 ```
 
-mini-minio 里对应的代码:
+`mini-minio` 里对应的代码:
 
 ```go
 canonReq := strings.Join([]string{
@@ -219,7 +219,7 @@ if subtle.ConstantTimeCompare([]byte(expected), []byte(signature)) != 1 {
 
 ## 1.4 API 路由
 
-mini-minio 用 `gorilla/mux` 做路由,所有路由定义都在 `NewRouter` 里:
+`mini-minio` 用 `gorilla/mux` 做路由,所有路由定义都在 `NewRouter` 里:
 
 ```go
 // api-handlers.go
@@ -352,7 +352,7 @@ ListObjects 的响应比较复杂,包含了对象列表和公共前缀:
 
 ## 1.6 ObjectLayer: 核心抽象接口
 
-整个 mini-minio 的架构围绕 `ObjectLayer` 接口展开。HTTP handler 只负责解析请求和组装响应,所有存储逻辑都通过这个接口:
+整个 `mini-minio` 的架构围绕 `ObjectLayer` 接口展开。HTTP handler 只负责解析请求和组装响应,所有存储逻辑都通过这个接口:
 
 ```go
 // object-api-interface.go
@@ -387,7 +387,7 @@ func (s *erasureSets) setForObject(object string) *erasureObjects {
 
 ## 1.7 Multipart Upload 的实现
 
-mini-minio 的 Multipart Upload 用的是内存存储,所有分片数据都存在一个全局的 map 里:
+`mini-minio` 的 Multipart Upload 用的是内存存储,所有分片数据都存在一个全局的 map 里:
 
 ```go
 // erasure-object.go
@@ -423,7 +423,7 @@ func completeMultipartUpload(ctx context.Context, ol ObjectLayer, uploadID strin
 
 这意味着如果上传一个很大的文件(比如几 GB),所有分片都会堆在内存里。原版 MinIO 的做法是把分片直接写到磁盘上,CompleteMultipartUpload 的时候只是组装元数据,不需要拷贝数据。不过作为学习项目,内存存储更容易理解。
 
-## 1.8 原版 MinIO 与 mini-minio 的区别
+## 1.8 原版 MinIO 与 `mini-minio` 的区别
 
 ### API 覆盖范围
 
