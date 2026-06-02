@@ -92,23 +92,6 @@ mc cp local/mybucket/myfile.txt ./downloaded.txt
 mc ls local/mybucket/
 ```
 
-### 使用 curl 测试
-
-```bash
-# 创建 bucket
-curl -X PUT http://localhost:9000/mybucket/
-
-# 上传对象
-curl -X PUT http://localhost:9000/mybucket/hello.txt \
-  -d "Hello, mini-minio!"
-
-# 下载对象
-curl http://localhost:9000/mybucket/hello.txt
-
-# 列出 bucket
-curl http://localhost:9000/
-```
-
 ## 🏗️ 架构
 
 ```
