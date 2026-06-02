@@ -7,6 +7,7 @@
     <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.26-blue.svg" alt="Go Version"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
     <a href="https://goreportcard.com/report/github.com/sanbei101/mini-minio"><img src="https://goreportcard.com/badge/github.com/sanbei101/mini-minio" alt="Go Report Card"></a>
+    <a href="https://sanbei101.github.io/mini-minio/"><img src="https://img.shields.io/badge/📖_电子书-Live_Site-purple" alt="Book"></a>
   </p>
 </p>
 
@@ -15,6 +16,25 @@
 **mini-minio** 是 [MinIO](https://github.com/minio/minio) 核心功能的精简实现。保留了纠删码、并行磁盘 I/O、多集合架构等高性能设计,去掉了分布式通信、自愈、加密、IAM 等生产级复杂度--专注于**学习和理解**对象存储的核心原理。
 
 > 如果你想了解 S3 协议、Reed-Solomon 纠删码、高并发磁盘 I/O 是如何协同工作的,这个项目就是为你准备的。
+
+## 📖 配套电子书
+
+本项目附带一本 **电子书**,讲解 MinIO 的核心原理与 mini-minio 的实现细节:
+
+> **[Mini-Minio 开发指南](https://sanbei101.github.io/mini-minio/)** - 从零构建一个轻量级对象存储系统
+
+| 章节 | 内容 |
+|------|------|
+| **第 1 章 · S3 协议基础** | Bucket / Object / Key 三大概念,AWS SigV4 签名四步流程,API 路由设计 |
+| **第 2 章 · 纠删码原理与实现** | Reed-Solomon 算法、Galois 域、流式编解码、multiWriter / parallelReader、缓冲池 |
+| **第 3 章 · Bucket 操作** | 并行创建 / 删除 / 列举,Quorum 一致性,与原版 MinIO 的架构对比 |
+| **第 4 章 · Object 操作** | PutObject 11 步流程、GetObject 流式解码、Range 请求、元数据投票机制 |
+| **第 5 章 · 二级接口** | 分片上传、Presigned URL、认证中间件、Range 下载与纠删码的集成 |
+| **第 6 章 · 分布式设计** | Erasure Set 分区、CRC32 路由、跨集合列举、Quorum 机制、write-then-rename |
+
+每章均包含:核心概念讲解 → 源码逐行分析 → 与原版 MinIO 的详细对比表。
+
+**[开始阅读 →](https://sanbei101.github.io/mini-minio/)**
 
 ## ✨ 特性
 
