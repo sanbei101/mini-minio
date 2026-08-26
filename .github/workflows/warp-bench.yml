@@ -26,8 +26,8 @@ jobs:
           chmod +x mc
           sudo mv mc /usr/local/bin/
 
-          wget https://dl.min.io/aistor/warp/release/linux-amd64/archive/warp_1.5.0_amd64.deb
-          sudo dpkg -i warp_1.5.0_amd64.deb
+          wget https://dl.min.io/aistor/warp/release/linux-amd64/warp.deb -O warp.deb
+          sudo dpkg -i warp.deb
 
       - name: Start mini-minio Server
         run: |
