@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"io"
-	"sync"
 
 	"github.com/sanbei101/mini-minio/internal/hash"
 )
@@ -14,28 +13,21 @@ type PutObjReader struct {
 
 // NewPutObjReader creates a PutObjReader from a plain reader and size.
 func NewPutObjReader(r io.Reader, size int64) (*PutObjReader, error) {
-	hr, err := hash.NewReader(r, size, "", "", size)
+	hr, err := hash.NewReader(r, size, "")
 	if err != nil {
 		return nil, err
 	}
 	return &PutObjReader{Reader: hr}, nil
 }
 
-// GetObjectReader wraps a reader with cleanup functions.
+// GetObjectReader wraps the object stream with its metadata.
 type GetObjectReader struct {
 	io.Reader
-	ObjInfo    ObjectInfo
-	cleanUpFns []func()
-	once       sync.Once
+	ObjInfo ObjectInfo
 }
 
-// Close runs cleanup functions and closes the underlying reader.
+// Close closes the underlying reader.
 func (g *GetObjectReader) Close() error {
-	g.once.Do(func() {
-		for _, fn := range g.cleanUpFns {
-			fn()
-		}
-	})
 	if rc, ok := g.Reader.(io.Closer); ok {
 		return rc.Close()
 	}
