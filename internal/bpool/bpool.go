@@ -60,14 +60,6 @@ func (bp *BytePoolCap) Put(b []byte) {
 	}
 }
 
-// Width returns the usable buffer length.
-func (bp *BytePoolCap) Width() int {
-	if bp == nil {
-		return 0
-	}
-	return bp.w
-}
-
 // WidthCap returns the actual buffer capacity (4K-aligned).
 func (bp *BytePoolCap) WidthCap() int {
 	if bp == nil {
