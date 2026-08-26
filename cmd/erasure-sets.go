@@ -20,15 +20,11 @@ import (
 // core shape: split drives into fixed-size sets, route each object to one set,
 // and merge namespace operations across all sets.
 type erasureSets struct {
-	sets          []*erasureObjects
-	setDriveCount int
-	dataBlocks    int
-	parityBlocks  int
-	bufferPool    *bpool.BytePoolCap
+	sets []*erasureObjects
 }
 
-// NewErasureObjects creates an ObjectLayer backed by one or more erasure sets.
-func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (ObjectLayer, error) {
+// NewErasureSets creates an ObjectLayer backed by one or more erasure sets.
+func NewErasureSets(diskPaths []string, dataBlocks, parityBlocks int) (ObjectLayer, error) {
 	setDriveCount := dataBlocks + parityBlocks
 	if dataBlocks <= 0 || parityBlocks <= 0 {
 		return nil, errors.New("data and parity blocks must be positive")
@@ -52,13 +48,7 @@ func NewErasureObjects(diskPaths []string, dataBlocks, parityBlocks int) (Object
 		sets = append(sets, set)
 	}
 
-	return &erasureSets{
-		sets:          sets,
-		setDriveCount: setDriveCount,
-		dataBlocks:    dataBlocks,
-		parityBlocks:  parityBlocks,
-		bufferPool:    pool,
-	}, nil
+	return &erasureSets{sets: sets}, nil
 }
 
 func (s *erasureSets) MakeBucket(ctx context.Context, bucket string) error {
@@ -88,7 +78,7 @@ func (s *erasureSets) GetBucketInfo(ctx context.Context, bucket string) (BucketI
 }
 
 func (s *erasureSets) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
-	bucketByName := map[string]BucketInfo{}
+	perSet := make([][]BucketInfo, 0, len(s.sets))
 	var firstErr error
 	var okSets int
 
@@ -101,25 +91,12 @@ func (s *erasureSets) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
 			continue
 		}
 		okSets++
-		for _, bucket := range buckets {
-			existing, exists := bucketByName[bucket.Name]
-			if !exists || bucket.Created.Before(existing.Created) {
-				bucketByName[bucket.Name] = bucket
-			}
-		}
+		perSet = append(perSet, buckets)
 	}
 	if okSets == 0 && firstErr != nil {
 		return nil, firstErr
 	}
-
-	buckets := make([]BucketInfo, 0, len(bucketByName))
-	for _, bucket := range bucketByName {
-		buckets = append(buckets, bucket)
-	}
-	sort.Slice(buckets, func(i, j int) bool {
-		return buckets[i].Name < buckets[j].Name
-	})
-	return buckets, nil
+	return mergeBucketInfos(perSet), nil
 }
 
 func (s *erasureSets) DeleteBucket(ctx context.Context, bucket string) error {
@@ -226,20 +203,22 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 	var foundBucket bool
 
 	for _, set := range s.sets {
-		setNames, err := set.listObjectNames(bucket, prefix)
-		if errors.Is(err, storage.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		foundBucket = true
-		for _, name := range setNames {
-			if seen[name] {
+		for _, disk := range set.disks {
+			diskNames, err := disk.ListObjects(bucket, prefix)
+			if errors.Is(err, storage.ErrNotFound) {
 				continue
 			}
-			seen[name] = true
-			names = append(names, name)
+			if err != nil {
+				return nil, err
+			}
+			foundBucket = true
+			for _, name := range diskNames {
+				if seen[name] {
+					continue
+				}
+				seen[name] = true
+				names = append(names, name)
+			}
 		}
 	}
 	if !foundBucket {

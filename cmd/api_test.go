@@ -92,7 +92,7 @@ func setup(t *testing.T) (*httptest.Server, string, string) {
 	for i := range disks {
 		disks[i] = t.TempDir()
 	}
-	obj, err := cmd.NewErasureObjects(disks, 4, 2)
+	obj, err := cmd.NewErasureSets(disks, 4, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

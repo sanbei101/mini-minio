@@ -19,7 +19,7 @@ func TestErasureSetsRouteAndListAcrossSets(t *testing.T) {
 		disks[i] = t.TempDir()
 	}
 
-	obj, err := cmd.NewErasureObjects(disks, 4, 2)
+	obj, err := cmd.NewErasureSets(disks, 4, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestErasureSetNamespaceDoesNotDependOnFirstDisk(t *testing.T) {
 		disks[i] = t.TempDir()
 	}
 
-	obj, err := cmd.NewErasureObjects(disks, 4, 2)
+	obj, err := cmd.NewErasureSets(disks, 4, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
