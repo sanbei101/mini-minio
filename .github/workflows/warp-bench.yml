@@ -25,7 +25,7 @@ jobs:
           wget https://dl.min.io/client/mc/release/linux-amd64/mc -O mc
           chmod +x mc
           sudo mv mc /usr/local/bin/
-          
+
           wget https://dl.min.io/aistor/warp/release/linux-amd64/archive/warp_1.5.0_amd64.deb
           sudo dpkg -i warp_1.5.0_amd64.deb
 
@@ -44,7 +44,7 @@ jobs:
         run: |
           mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin123
           mc mb myminio/test-bucket-compatibility
-      
+
       - name: Run Warp S3 Benchmark
         run: |
           warp mixed --host=127.0.0.1:9000 \
@@ -57,7 +57,8 @@ jobs:
            --obj.size=64KiB 2>&1 | tee warp.log
           echo "## S3 Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -n 100 warp.log >> $GITHUB_STEP_SUMMARY
+          # 使用 sed 去除所有 ANSI 转义序列后再输出
+          sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" warp.log | tail -n 100 >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Stop mini-minio Server
