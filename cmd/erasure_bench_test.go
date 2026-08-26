@@ -19,7 +19,7 @@ func createErasureLayer(tb testing.TB, dataBlocks, parityBlocks int) cmd.ObjectL
 	for i := range disks {
 		disks[i] = tb.TempDir()
 	}
-	obj, err := cmd.NewErasureObjects(disks, dataBlocks, parityBlocks)
+	obj, err := cmd.NewErasureSets(disks, dataBlocks, parityBlocks)
 	if err != nil {
 		tb.Fatal(err)
 	}

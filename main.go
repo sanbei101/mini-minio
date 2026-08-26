@@ -37,7 +37,7 @@ func main() {
 
 	log.Info().Strs("disks", diskPaths).Msg("initialized disks")
 
-	obj, err := cmd.NewErasureObjects(diskPaths, *data, *parity)
+	obj, err := cmd.NewErasureSets(diskPaths, *data, *parity)
 	if err != nil {
 		log.Fatal().Err(err)
 	}
