@@ -8,16 +8,15 @@ import (
 	"sync/atomic"
 
 	"github.com/klauspost/reedsolomon"
-	"github.com/phuslu/log"
 
 	"github.com/sanbei101/mini-minio/internal/bpool"
 )
 
 const BlockSize = 10 << 20 // 10 MiB
 
-// Erasure wraps reedsolomon encoder with lazy initialization and buffer pool support.
+// Erasure wraps reedsolomon encoder with buffer pool support.
 type Erasure struct {
-	encoder                  func() reedsolomon.Encoder
+	encoder                  reedsolomon.Encoder
 	dataBlocks, parityBlocks int
 	blockSize                int64
 	pool                     *bpool.BytePoolCap
@@ -31,33 +30,22 @@ func New(dataBlocks, parityBlocks int, pool *bpool.BytePoolCap) (Erasure, error)
 		blockSize:    BlockSize,
 		pool:         pool,
 	}
-	var enc reedsolomon.Encoder
-	var once sync.Once
-	e.encoder = func() reedsolomon.Encoder {
-		once.Do(func() {
-			var err error
-			enc, err = reedsolomon.New(dataBlocks, parityBlocks,
-				reedsolomon.WithAutoGoroutines(int(e.ShardSize())))
-			if err != nil {
-				log.Panic().Err(err).Msg("failed to create reedsolomon encoder")
-			}
-		})
-		return enc
+	enc, err := reedsolomon.New(dataBlocks, parityBlocks,
+		reedsolomon.WithAutoGoroutines(int(e.ShardSize())))
+	if err != nil {
+		return Erasure{}, err
 	}
+	e.encoder = enc
 	return e, nil
 }
 
-func (e *Erasure) DataBlocks() int   { return e.dataBlocks }
-func (e *Erasure) ParityBlocks() int { return e.parityBlocks }
-func (e *Erasure) BlockSize() int64  { return e.blockSize }
-
 func (e *Erasure) ShardSize() int64 {
-	return e.ShardSizeFor(e.blockSize)
+	return e.shardSizeFor(e.blockSize)
 }
 
-// ShardSizeFor returns the ceil-divided shard size for a supported integer type.
-func (e *Erasure) ShardSizeFor[Int shardSizeInteger](blockSize Int) Int {
-	divisor := Int(e.dataBlocks)
+// shardSizeFor returns the ceil-divided shard size for a block.
+func (e *Erasure) shardSizeFor(blockSize int64) int64 {
+	divisor := int64(e.dataBlocks)
 	if blockSize == 0 || divisor == 0 {
 		return 0
 	}
@@ -70,7 +58,7 @@ func (e *Erasure) ShardFileSize(totalLength int64) int64 {
 	}
 	numShards := totalLength / e.blockSize
 	lastBlockSize := totalLength % e.blockSize
-	lastShardSize := e.ShardSizeFor(lastBlockSize)
+	lastShardSize := e.shardSizeFor(lastBlockSize)
 	return numShards*e.ShardSize() + lastShardSize
 }
 
@@ -78,11 +66,11 @@ func (e *Erasure) EncodeData(data []byte) ([][]byte, error) {
 	if len(data) == 0 {
 		return make([][]byte, e.dataBlocks+e.parityBlocks), nil
 	}
-	shards, err := e.encoder().Split(data)
+	shards, err := e.encoder.Split(data)
 	if err != nil {
 		return nil, err
 	}
-	if err = e.encoder().Encode(shards); err != nil {
+	if err = e.encoder.Encode(shards); err != nil {
 		return nil, err
 	}
 	return shards, nil
@@ -98,7 +86,7 @@ func (e *Erasure) DecodeDataBlocks(data [][]byte) error {
 	if missing == 0 || missing == len(data) {
 		return nil
 	}
-	return e.encoder().ReconstructData(data)
+	return e.encoder.ReconstructData(data)
 }
 
 // --- multiWriter ---
@@ -183,7 +171,6 @@ func (e *Erasure) Encode(
 // using a channel-trigger pattern: success stops more reads, failure triggers fallback.
 type parallelReader struct {
 	readers       []io.ReaderAt
-	orgReaders    []io.ReaderAt
 	dataBlocks    int
 	offset        int64
 	shardSize     int64
@@ -217,7 +204,6 @@ func newParallelReader(
 
 	return &parallelReader{
 		readers:       readers,
-		orgReaders:    readers,
 		dataBlocks:    e.dataBlocks,
 		offset:        (offset / e.blockSize) * e.ShardSize(),
 		shardSize:     e.ShardSize(),
@@ -225,17 +211,6 @@ func newParallelReader(
 		buf:           make([][]byte, n),
 		readerToBuf:   r2b,
 		stashBuffer:   stash,
-	}
-}
-
-// Done returns any borrowed buffers to the pool.
-func (p *parallelReader) Done() {
-	if p.stashBuffer != nil {
-		// The stash buffer came from pool; we can't Put it back without knowing
-		// the pool reference. Instead, we just nil it out. The pool's bounded
-		// channel will naturally replace it on next Get.
-		// For the global pool, the caller (Decode) handles Put via defer.
-		p.stashBuffer = nil
 	}
 }
 
@@ -323,7 +298,6 @@ func (p *parallelReader) Read(dst [][]byte) ([][]byte, error) {
 
 			numRead, err := r.ReadAt(p.buf[bufIdx], p.offset)
 			if err != nil {
-				p.orgReaders[bufIdx] = nil
 				p.readers[idx] = nil
 				disksNotFound.Add(1)
 				readTriggerCh <- true // failure, try next disk
@@ -359,7 +333,11 @@ func (e *Erasure) Decode(
 	}
 
 	rp := newParallelReader(readers, e, offset, totalLength, e.pool)
-	defer rp.Done()
+	defer func() {
+		if rp.stashBuffer != nil {
+			e.pool.Put(rp.stashBuffer)
+		}
+	}()
 
 	startBlock := offset / e.blockSize
 	endBlock := (offset + length - 1) / e.blockSize
@@ -401,8 +379,4 @@ func (e *Erasure) Decode(
 		}
 	}
 	return nil
-}
-
-type shardSizeInteger interface {
-	~int | ~int64 | ~uint | ~uint64
 }
