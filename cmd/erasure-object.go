@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 	"uuid"
@@ -45,7 +44,7 @@ type erasureObjects struct {
 	dataBlocks    int
 	parityBlocks  int
 	pool          *bpool.BytePoolCap
-	mu            sync.RWMutex
+	mu            sync.Mutex
 	erasureEngine erasure.Erasure
 }
 
@@ -93,6 +92,28 @@ func (e *erasureObjects) statBucket(bucket string) (os.FileInfo, error) {
 	return nil, storage.ErrNotFound
 }
 
+// mergeBucketInfos merges per-disk bucket lists by name, keeping the earliest
+// Created time, and returns them sorted by name.
+func mergeBucketInfos(perDisk [][]BucketInfo) []BucketInfo {
+	bucketByName := map[string]BucketInfo{}
+	for _, infos := range perDisk {
+		for _, b := range infos {
+			existing, exists := bucketByName[b.Name]
+			if !exists || b.Created.Before(existing.Created) {
+				bucketByName[b.Name] = b
+			}
+		}
+	}
+	buckets := make([]BucketInfo, 0, len(bucketByName))
+	for _, b := range bucketByName {
+		buckets = append(buckets, b)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].Name < buckets[j].Name
+	})
+	return buckets
+}
+
 func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 	type result struct {
 		infos []BucketInfo
@@ -121,7 +142,7 @@ func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 	}
 	wg.Wait()
 
-	bucketByName := map[string]BucketInfo{}
+	perDisk := make([][]BucketInfo, 0, len(results))
 	var firstErr error
 	var okDisks int
 	for _, r := range results {
@@ -132,62 +153,12 @@ func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 			continue
 		}
 		okDisks++
-		for _, b := range r.infos {
-			existing, exists := bucketByName[b.Name]
-			if !exists || b.Created.Before(existing.Created) {
-				bucketByName[b.Name] = b
-			}
-		}
+		perDisk = append(perDisk, r.infos)
 	}
 	if okDisks == 0 && firstErr != nil {
 		return nil, firstErr
 	}
-
-	buckets := make([]BucketInfo, 0, len(bucketByName))
-	for _, b := range bucketByName {
-		buckets = append(buckets, b)
-	}
-	sort.Slice(buckets, func(i, j int) bool {
-		return buckets[i].Name < buckets[j].Name
-	})
-	return buckets, nil
-}
-
-func (e *erasureObjects) listObjectNames(bucket, prefix string) ([]string, error) {
-	seen := map[string]bool{}
-	names := []string{}
-	var firstErr error
-	var foundBucket bool
-
-	for _, disk := range e.disks {
-		diskNames, err := disk.ListObjects(bucket, prefix)
-		if errors.Is(err, storage.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		foundBucket = true
-		for _, name := range diskNames {
-			if seen[name] {
-				continue
-			}
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	if !foundBucket {
-		if firstErr != nil {
-			return nil, firstErr
-		}
-		return nil, storage.ErrNotFound
-	}
-
-	sort.Strings(names)
-	return names, nil
+	return mergeBucketInfos(perDisk), nil
 }
 
 func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {
@@ -476,17 +447,7 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 			errs[idx] = disk.DeleteObject(bucket, object)
 		}(i, d)
 	}
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-ctx.Done():
-		return ObjectInfo{}, ctx.Err()
-	case <-done:
-	}
+	wg.Wait()
 
 	var failCount int
 	for index, err := range errs {
@@ -510,78 +471,6 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 	}
 
 	return info, nil
-}
-
-func (e *erasureObjects) ListObjectsV2(
-	ctx context.Context,
-	bucket, prefix, continuationToken, delimiter string,
-	maxKeys int,
-	startAfter string,
-) (ListObjectsV2Info, error) {
-	names, err := e.listObjectNames(bucket, prefix)
-	if errors.Is(err, storage.ErrNotFound) {
-		return ListObjectsV2Info{}, ErrBucketNotFound
-	}
-	if err != nil {
-		return ListObjectsV2Info{}, err
-	}
-
-	start := startAfter
-	if continuationToken != "" {
-		start = continuationToken
-	}
-	if start != "" {
-		i := sort.SearchStrings(names, start)
-		if i < len(names) && names[i] == start {
-			i++
-		}
-		names = names[i:]
-	}
-
-	if maxKeys <= 0 || maxKeys > 1000 {
-		maxKeys = 1000
-	}
-
-	var objects []ObjectInfo
-	var prefixes []string
-	seen := map[string]bool{}
-
-	for _, name := range names {
-		if len(objects)+len(prefixes) >= maxKeys {
-			break
-		}
-		if delimiter != "" {
-			rel := strings.TrimPrefix(name, prefix)
-			if idx := strings.Index(rel, delimiter); idx >= 0 {
-				cp := prefix + rel[:idx+len(delimiter)]
-				if !seen[cp] {
-					seen[cp] = true
-					prefixes = append(prefixes, cp)
-				}
-				continue
-			}
-		}
-		meta, merr := e.readMeta(bucket, name)
-		if merr != nil {
-			continue
-		}
-		objects = append(objects, ObjectInfo{
-			Bucket:  bucket,
-			Name:    name,
-			Size:    meta.Size,
-			ModTime: meta.ModTime,
-			ETag:    meta.ETag,
-		})
-	}
-
-	result := ListObjectsV2Info{Objects: objects, Prefixes: prefixes}
-	if len(objects)+len(prefixes) >= maxKeys && len(names) > maxKeys {
-		result.IsTruncated = true
-		if len(objects) > 0 {
-			result.NextContinuationToken = objects[len(objects)-1].Name
-		}
-	}
-	return result, nil
 }
 
 // readMeta reads xl.meta from all disks in parallel and picks the best via quorum.
@@ -657,7 +546,6 @@ func (rs *HTTPRangeSpec) GetOffsetLength(size int64) (int64, int64, error) {
 type multipartUpload struct {
 	bucket string
 	object string
-	id     string
 	parts  map[int][]byte
 	etags  map[int]string
 	mu     sync.Mutex
@@ -674,7 +562,6 @@ func newMultipartUpload(bucket, object string) string {
 	multipartUploads[id] = &multipartUpload{
 		bucket: bucket,
 		object: object,
-		id:     id,
 		parts:  map[int][]byte{},
 		etags:  map[int]string{},
 	}
