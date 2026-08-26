@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 const metaFile = "xl.meta"
@@ -25,8 +26,6 @@ func NewDisk(path string) (*Disk, error) {
 	}
 	return &Disk{path: path}, nil
 }
-
-func (d *Disk) Path() string { return d.path }
 
 func (d *Disk) MakeBucket(bucket string) error {
 	p := filepath.Join(d.path, bucket)
@@ -90,18 +89,6 @@ func (d *Disk) ReadShardFile(bucket, object, dataDir string, partNum int) (io.Re
 		return nil, 0, err
 	}
 	return f, fi.Size(), nil
-}
-
-func (d *Disk) WriteMeta(bucket, object string, meta any) error {
-	dir := filepath.Join(d.path, bucket, object)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	data, err := json.Marshal(meta)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, metaFile), data, 0o644)
 }
 
 // WriteMetaTmp writes metadata to a temporary file. Returns the tmp path on success.
@@ -181,19 +168,5 @@ func (d *Disk) ListObjects(bucket, prefix string) ([]string, error) {
 }
 
 func partName(n int) string {
-	return "part." + itoa(n)
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := [20]byte{}
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[pos:])
+	return "part." + strconv.Itoa(n)
 }
