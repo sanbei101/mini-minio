@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/phuslu/log"
 
 	"github.com/sanbei101/mini-minio/internal/bpool"

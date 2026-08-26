@@ -52,7 +52,16 @@ func (e *Erasure) ParityBlocks() int { return e.parityBlocks }
 func (e *Erasure) BlockSize() int64  { return e.blockSize }
 
 func (e *Erasure) ShardSize() int64 {
-	return ceilFrac(e.blockSize, int64(e.dataBlocks))
+	return e.ShardSizeFor(e.blockSize)
+}
+
+// ShardSizeFor returns the ceil-divided shard size for a supported integer type.
+func (e *Erasure) ShardSizeFor[Int shardSizeInteger](blockSize Int) Int {
+	divisor := Int(e.dataBlocks)
+	if blockSize == 0 || divisor == 0 {
+		return 0
+	}
+	return (blockSize-1)/divisor + 1
 }
 
 func (e *Erasure) ShardFileSize(totalLength int64) int64 {
@@ -61,7 +70,7 @@ func (e *Erasure) ShardFileSize(totalLength int64) int64 {
 	}
 	numShards := totalLength / e.blockSize
 	lastBlockSize := totalLength % e.blockSize
-	lastShardSize := ceilFrac(lastBlockSize, int64(e.dataBlocks))
+	lastShardSize := e.ShardSizeFor(lastBlockSize)
 	return numShards*e.ShardSize() + lastShardSize
 }
 
@@ -263,7 +272,7 @@ func (p *parallelReader) Read(dst [][]byte) ([][]byte, error) {
 	}
 
 	var mu sync.Mutex
-	disksNotFound := int32(0)
+	var disksNotFound atomic.Int32
 	readerIndex := 0
 
 	// Channel-trigger: true = try next disk, false = stop.
@@ -316,7 +325,7 @@ func (p *parallelReader) Read(dst [][]byte) ([][]byte, error) {
 			if err != nil {
 				p.orgReaders[bufIdx] = nil
 				p.readers[idx] = nil
-				atomic.AddInt32(&disksNotFound, 1)
+				disksNotFound.Add(1)
 				readTriggerCh <- true // failure, try next disk
 				return
 			}
@@ -334,7 +343,7 @@ func (p *parallelReader) Read(dst [][]byte) ([][]byte, error) {
 		p.offset += shardSize
 		return newBuf, nil
 	}
-	return nil, fmt.Errorf("%w (offline-disks=%d/%d)", ErrWriteQuorum, disksNotFound, n)
+	return nil, fmt.Errorf("%w (offline-disks=%d/%d)", ErrWriteQuorum, disksNotFound.Load(), n)
 }
 
 // Decode reads shards from readers in parallel and reconstructs the original data.
@@ -394,9 +403,6 @@ func (e *Erasure) Decode(
 	return nil
 }
 
-func ceilFrac(numerator, denominator int64) int64 {
-	if denominator == 0 {
-		return 0
-	}
-	return (numerator + denominator - 1) / denominator
+type shardSizeInteger interface {
+	~int | ~int64 | ~uint | ~uint64
 }
