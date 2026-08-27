@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/sanbei101/mini-minio/internal/bpool"
 	"github.com/sanbei101/mini-minio/internal/erasure"
@@ -33,8 +35,11 @@ func NewErasureSets(diskPaths []string, dataBlocks, parityBlocks int) (ObjectLay
 		return nil, fmt.Errorf("need disk paths in groups of %d, got %d", setDriveCount, len(diskPaths))
 	}
 
-	// Create buffer pool: 64 buffers of BlockSize, 4K-aligned.
-	pool := bpool.NewBytePoolCap(64, erasure.BlockSize, erasure.BlockSize)
+	shardSize := (erasure.BlockSize + dataBlocks - 1) / dataBlocks
+	bufferSize := max(erasure.BlockSize, (dataBlocks+parityBlocks)*shardSize)
+	bufferSize = (bufferSize + 4095) &^ 4095
+	poolSize := min(max(runtime.GOMAXPROCS(0)*2, 1), 16)
+	pool := bpool.NewBytePoolCap(uint64(poolSize), bufferSize, bufferSize)
 	pool.Populate()
 
 	setCount := len(diskPaths) / setDriveCount
@@ -202,10 +207,36 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 	names := []string{}
 	var foundBucket bool
 
+	type result struct {
+		names []string
+		err   error
+	}
+	var disks []*storage.Disk
 	for _, set := range s.sets {
-		for _, disk := range set.disks {
-			diskNames, err := disk.ListObjects(bucket, prefix)
-			if errors.Is(err, storage.ErrNotFound) {
+		disks = append(disks, set.disks...)
+	}
+	results := make([]result, len(disks))
+	var wg sync.WaitGroup
+	for i, disk := range disks {
+		wg.Add(1)
+		go func(idx int, d *storage.Disk) {
+			defer wg.Done()
+			diskNames, err := d.ListObjects(bucket, prefix)
+			results[idx] = result{names: diskNames, err: err}
+		}(i, disk)
+	}
+	wg.Wait()
+
+	for _, result := range results {
+		if errors.Is(result.err, storage.ErrNotFound) {
+			continue
+		}
+		if result.err != nil {
+			return nil, result.err
+		}
+		foundBucket = true
+		for _, name := range result.names {
+			if seen[name] {
 				continue
 			}
 			if err != nil {

@@ -482,6 +482,10 @@ func (e *erasureObjects) GetObjectNInfo(
 }
 
 func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string) (ObjectInfo, error) {
+	lock := e.objectLock(bucket, object)
+	lock.Lock()
+	defer lock.Unlock()
+
 	info, err := e.GetObjectInfo(ctx, bucket, object)
 	if err != nil {
 		return ObjectInfo{}, err
