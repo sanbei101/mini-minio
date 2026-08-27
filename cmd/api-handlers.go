@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/phuslu/log"
 )
 
@@ -21,42 +20,57 @@ type apiHandlers struct {
 }
 
 func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
-	r := mux.NewRouter()
-	api := apiHandlers{obj: obj, creds: creds}
+	mux := http.NewServeMux()
+	api := &apiHandlers{obj: obj, creds: creds}
 
 	// Bucket-level
-	r.Methods("GET").Path("/").HandlerFunc(api.ListBuckets)
-	r.Methods("PUT").Path("/{bucket}/").HandlerFunc(api.CreateBucket)
-	r.Methods("DELETE").Path("/{bucket}/").HandlerFunc(api.DeleteBucket)
-	r.Methods("HEAD").Path("/{bucket}/").HandlerFunc(api.HeadBucket)
-	r.Methods("GET").Path("/{bucket}/").HandlerFunc(api.ListObjects)
+	mux.HandleFunc("GET /{$}", api.ListBuckets)
+	mux.HandleFunc("PUT /{bucket}", api.CreateBucket)
+	mux.HandleFunc("DELETE /{bucket}", api.DeleteBucket)
+	mux.HandleFunc("HEAD /{bucket}", api.HeadBucket)
+	mux.HandleFunc("GET /{bucket}", api.ListObjects)
 
-	// Multipart
-	r.Methods("POST").Path("/{bucket}/{object:.+}").Queries("uploads", "").HandlerFunc(api.CreateMultipartUpload)
-	r.Methods("PUT").
-		Path("/{bucket}/{object:.+}").
-		Queries("partNumber", "{partNumber}", "uploadId", "{uploadId}").
-		HandlerFunc(api.UploadPart)
-	r.Methods("POST").
-		Path("/{bucket}/{object:.+}").
-		Queries("uploadId", "{uploadId}").
-		HandlerFunc(api.CompleteMultipartUpload)
-	r.Methods("DELETE").
-		Path("/{bucket}/{object:.+}").
-		Queries("uploadId", "{uploadId}").
-		HandlerFunc(api.AbortMultipartUpload)
+	// Multipart and Object level
+	mux.HandleFunc("PUT /{bucket}/{object...}", api.dispatchPut)
+	mux.HandleFunc("POST /{bucket}/{object...}", api.dispatchPost)
+	mux.HandleFunc("DELETE /{bucket}/{object...}", api.dispatchDelete)
+	mux.HandleFunc("GET /{bucket}/{object...}", api.GetObject)
+	mux.HandleFunc("HEAD /{bucket}/{object...}", api.HeadObject)
 
-	// Object-level
-	r.Methods("PUT").Path("/{bucket}/{object:.+}").HandlerFunc(api.PutObject)
-	r.Methods("GET").Path("/{bucket}/{object:.+}").HandlerFunc(api.GetObject)
-	r.Methods("HEAD").Path("/{bucket}/{object:.+}").HandlerFunc(api.HeadObject)
-	r.Methods("DELETE").Path("/{bucket}/{object:.+}").HandlerFunc(api.DeleteObject)
-
-	// If no credentials configured, skip auth.
 	if creds.AccessKey == "" {
-		return r
+		return mux
 	}
-	return requestLoggingMiddleware(authMiddleware(creds, r))
+	return requestLoggingMiddleware(authMiddleware(creds, mux))
+}
+
+func (a *apiHandlers) dispatchPut(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Has("uploadId") && q.Has("partNumber") {
+		a.UploadPart(w, r)
+		return
+	}
+	a.PutObject(w, r)
+}
+
+func (a *apiHandlers) dispatchPost(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Has("uploads") {
+		a.CreateMultipartUpload(w, r)
+		return
+	}
+	if q.Has("uploadId") {
+		a.CompleteMultipartUpload(w, r)
+		return
+	}
+	writeError(w, http.StatusBadRequest, "InvalidRequest", "unsupported POST operation")
+}
+
+func (a *apiHandlers) dispatchDelete(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("uploadId") {
+		a.AbortMultipartUpload(w, r)
+		return
+	}
+	a.DeleteObject(w, r)
 }
 
 type loggingResponseWriter struct {
@@ -133,7 +147,7 @@ func (a *apiHandlers) ListBuckets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiHandlers) CreateBucket(w http.ResponseWriter, r *http.Request) {
-	bucket := mux.Vars(r)["bucket"]
+	bucket := r.PathValue("bucket")
 	if err := a.obj.MakeBucket(r.Context(), bucket); err != nil {
 		writeError(w, http.StatusConflict, "BucketAlreadyExists", err.Error())
 		return
@@ -143,7 +157,7 @@ func (a *apiHandlers) CreateBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiHandlers) DeleteBucket(w http.ResponseWriter, r *http.Request) {
-	bucket := mux.Vars(r)["bucket"]
+	bucket := r.PathValue("bucket")
 	if err := a.obj.DeleteBucket(r.Context(), bucket); err != nil {
 		writeError(w, http.StatusNotFound, "NoSuchBucket", err.Error())
 		return
@@ -152,7 +166,7 @@ func (a *apiHandlers) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiHandlers) HeadBucket(w http.ResponseWriter, r *http.Request) {
-	bucket := mux.Vars(r)["bucket"]
+	bucket := r.PathValue("bucket")
 	if _, err := a.obj.GetBucketInfo(r.Context(), bucket); err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -161,7 +175,7 @@ func (a *apiHandlers) HeadBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiHandlers) ListObjects(w http.ResponseWriter, r *http.Request) {
-	bucket := mux.Vars(r)["bucket"]
+	bucket := r.PathValue("bucket")
 	q := r.URL.Query()
 	prefix := q.Get("prefix")
 	delimiter := q.Get("delimiter")
@@ -231,8 +245,7 @@ func (a *apiHandlers) ListObjects(w http.ResponseWriter, r *http.Request) {
 // --- Object handlers ---
 
 func (a *apiHandlers) PutObject(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	bucket, object := vars["bucket"], vars["object"]
+	bucket, object := r.PathValue("bucket"), r.PathValue("object")
 
 	var body io.Reader = r.Body
 	size := r.ContentLength
@@ -261,8 +274,7 @@ func (a *apiHandlers) PutObject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	bucket, object := vars["bucket"], vars["object"]
+	bucket, object := r.PathValue("bucket"), r.PathValue("object")
 
 	var rs *HTTPRangeSpec
 	if rangeHdr := r.Header.Get("Range"); rangeHdr != "" {
@@ -320,8 +332,7 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiHandlers) HeadObject(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	bucket, object := vars["bucket"], vars["object"]
+	bucket, object := r.PathValue("bucket"), r.PathValue("object")
 
 	objInfo, err := a.obj.GetObjectInfo(r.Context(), bucket, object)
 	if err != nil {
@@ -336,8 +347,7 @@ func (a *apiHandlers) HeadObject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiHandlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	bucket, object := vars["bucket"], vars["object"]
+	bucket, object := r.PathValue("bucket"), r.PathValue("object")
 
 	if _, err := a.obj.DeleteObject(r.Context(), bucket, object); err != nil {
 		writeError(w, http.StatusNotFound, "NoSuchKey", err.Error())
@@ -349,8 +359,7 @@ func (a *apiHandlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
 // --- Multipart handlers ---
 
 func (a *apiHandlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	bucket, object := vars["bucket"], vars["object"]
+	bucket, object := r.PathValue("bucket"), r.PathValue("object")
 	uploadID := newMultipartUpload(bucket, object)
 
 	type resp struct {
@@ -386,8 +395,7 @@ func (a *apiHandlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *apiHandlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	bucket, object := vars["bucket"], vars["object"]
+	bucket, object := r.PathValue("bucket"), r.PathValue("object")
 	uploadID := r.URL.Query().Get("uploadId")
 
 	type part struct {
