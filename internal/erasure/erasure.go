@@ -77,13 +77,17 @@ func (e *Erasure) EncodeData(data []byte) ([][]byte, error) {
 }
 
 func (e *Erasure) DecodeDataBlocks(data [][]byte) error {
-	missing := 0
-	for _, b := range data {
-		if len(b) == 0 {
-			missing++
+	missingData := 0
+	allMissing := true
+	for i, b := range data {
+		if len(b) > 0 {
+			allMissing = false
+		}
+		if i < e.dataBlocks && len(b) == 0 {
+			missingData++
 		}
 	}
-	if missing == 0 || missing == len(data) {
+	if missingData == 0 || allMissing {
 		return nil
 	}
 	return e.encoder.ReconstructData(data)
@@ -359,23 +363,21 @@ func (e *Erasure) Decode(
 		blockEnd := min(blockStart+e.blockSize, totalLength)
 		blockLen := blockEnd - blockStart
 
-		var decoded []byte
-		for i := 0; i < e.dataBlocks; i++ {
-			decoded = append(decoded, bufs[i]...)
-		}
-		if int64(len(decoded)) > blockLen {
-			decoded = decoded[:blockLen]
-		}
-
 		// Trim to requested range within this block.
 		dataStart := max(offset-blockStart, 0)
-		dataEnd := min(offset+length-blockStart, int64(len(decoded)))
-		if block > startBlock {
-			dataStart = 0
-		}
-
-		if _, err := writer.Write(decoded[dataStart:dataEnd]); err != nil {
-			return err
+		dataEnd := min(offset+length-blockStart, blockLen)
+		shardSize := int64(len(bufs[0]))
+		for i := 0; i < e.dataBlocks; i++ {
+			shardStart := int64(i) * shardSize
+			shardEnd := min(shardStart+int64(len(bufs[i])), blockLen)
+			start := max(dataStart, shardStart)
+			end := min(dataEnd, shardEnd)
+			if start >= end {
+				continue
+			}
+			if _, err := writer.Write(bufs[i][start-shardStart : end-shardStart]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
