@@ -271,10 +271,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 	}
 	buffer = buffer[:erasure.BlockSize]
 
-	md5h := md5.New()
-	tee := io.TeeReader(data, md5h)
-
-	n, encErr := enc.Encode(ctx, tee, writers, buffer, writeQuorum)
+	n, encErr := enc.Encode(ctx, data, writers, buffer, writeQuorum)
 	for _, f := range files {
 		f.Close()
 	}
@@ -283,7 +280,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		return ObjectInfo{}, encErr
 	}
 
-	etag := hex.EncodeToString(md5h.Sum(nil))
+	etag := data.MD5()
 	now := time.Now().UTC()
 	contentType := "application/octet-stream"
 

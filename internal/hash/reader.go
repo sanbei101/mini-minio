@@ -80,3 +80,6 @@ func (r *Reader) Read(p []byte) (int, error) {
 // will return during reading. It returns -1 for unlimited
 // data.
 func (r *Reader) Size() int64 { return r.size }
+
+// MD5 returns the checksum of the bytes read so far.
+func (r *Reader) MD5() string { return hex.EncodeToString(r.md5Hasher.Sum(nil)) }
