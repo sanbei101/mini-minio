@@ -25,17 +25,16 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 
 	// Bucket-level
 	mux.HandleFunc("GET /{$}", api.ListBuckets)
-	mux.HandleFunc("PUT /{bucket}", api.CreateBucket)
-	mux.HandleFunc("DELETE /{bucket}", api.DeleteBucket)
-	mux.HandleFunc("HEAD /{bucket}", api.HeadBucket)
-	mux.HandleFunc("GET /{bucket}", api.ListObjects)
+	mux.HandleFunc("PUT /{bucket}/{$}", api.CreateBucket)
+	mux.HandleFunc("DELETE /{bucket}/{$}", api.DeleteBucket)
+	mux.HandleFunc("HEAD /{bucket}/{$}", api.HeadBucket)
+	mux.HandleFunc("GET /{bucket}/{$}", api.ListObjects)
 
 	// Multipart and Object level
 	mux.HandleFunc("PUT /{bucket}/{object...}", api.dispatchPut)
 	mux.HandleFunc("POST /{bucket}/{object...}", api.dispatchPost)
 	mux.HandleFunc("DELETE /{bucket}/{object...}", api.dispatchDelete)
-	mux.HandleFunc("GET /{bucket}/{object...}", api.GetObject)
-	mux.HandleFunc("HEAD /{bucket}/{object...}", api.HeadObject)
+	mux.HandleFunc("GET /{bucket}/{object...}", api.dispatchGet)
 
 	if creds.AccessKey == "" {
 		return mux
@@ -71,6 +70,14 @@ func (a *apiHandlers) dispatchDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.DeleteObject(w, r)
+}
+
+func (a *apiHandlers) dispatchGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodHead {
+		a.HeadObject(w, r)
+		return
+	}
+	a.GetObject(w, r)
 }
 
 type loggingResponseWriter struct {
