@@ -6,7 +6,6 @@
     <a href="https://pkg.go.dev/github.com/sanbei101/mini-minio"><img src="https://pkg.go.dev/badge/github.com/sanbei101/mini-minio.svg" alt="Go Reference"></a>
     <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.27-blue.svg" alt="Go Version"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
-    <a href="https://goreportcard.com/report/github.com/sanbei101/mini-minio"><img src="https://goreportcard.com/badge/github.com/sanbei101/mini-minio" alt="Go Report Card"></a>
     <a href="https://sanbei101.github.io/mini-minio/"><img src="https://img.shields.io/badge/📖_电子书-Live_Site-purple" alt="Book"></a>
   </p>
 </p>
