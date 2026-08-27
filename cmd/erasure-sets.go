@@ -239,17 +239,8 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 			if seen[name] {
 				continue
 			}
-			if err != nil {
-				return nil, err
-			}
-			foundBucket = true
-			for _, name := range diskNames {
-				if seen[name] {
-					continue
-				}
-				seen[name] = true
-				names = append(names, name)
-			}
+			seen[name] = true
+			names = append(names, name)
 		}
 	}
 	if !foundBucket {
