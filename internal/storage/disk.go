@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 const metaFile = "xl.meta"
@@ -138,8 +139,25 @@ func (d *Disk) ListObjects(bucket, prefix string) ([]string, error) {
 		return nil, err
 	}
 
-	var names []string
-	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+	walkDir := dir
+	if slash := strings.LastIndexByte(prefix, '/'); slash >= 0 {
+		candidate := filepath.FromSlash(prefix[:slash+1])
+		if !filepath.IsAbs(candidate) {
+			candidateDir := filepath.Join(dir, candidate)
+			rel, relErr := filepath.Rel(dir, candidateDir)
+			if relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				walkDir = candidateDir
+				if _, err := os.Stat(walkDir); os.IsNotExist(err) {
+					return []string{}, nil
+				} else if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	names := make([]string, 0)
+	err := filepath.WalkDir(walkDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
