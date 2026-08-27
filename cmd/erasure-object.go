@@ -442,7 +442,7 @@ func (e *erasureObjects) GetObjectNInfo(
 	readers := make([]io.ReaderAt, len(e.disks))
 	closers := make([]io.Closer, len(e.disks))
 	for i, d := range e.disks {
-		rc, _, ferr := d.ReadShardFile(bucket, object, meta.DataDir, 1)
+		rc, ferr := d.ReadShardFile(bucket, object, meta.DataDir, 1)
 		if ferr == nil {
 			if rat, ok := rc.(io.ReaderAt); ok {
 				readers[i] = rat

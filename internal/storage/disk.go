@@ -74,21 +74,20 @@ func (d *Disk) CreateShardFile(bucket, object, dataDir string, partNum int) (*os
 }
 
 // ReadShardFile returns a ReaderAt for a shard file.
-func (d *Disk) ReadShardFile(bucket, object, dataDir string, partNum int) (io.ReadCloser, int64, error) {
+func (d *Disk) ReadShardFile(bucket, object, dataDir string, partNum int) (io.ReadCloser, error) {
 	p := filepath.Join(d.path, bucket, object, dataDir, partName(partNum))
 	f, err := os.Open(p)
 	if os.IsNotExist(err) {
-		return nil, 0, ErrNotFound
+		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	fi, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, 0, err
-	}
-	return f, fi.Size(), nil
+	return f, nil
+}
+
+func (d *Disk) DeleteObjectData(bucket, object, dataDir string) error {
+	return os.RemoveAll(filepath.Join(d.path, bucket, object, dataDir))
 }
 
 // WriteMetaTmp writes metadata to a temporary file. Returns the tmp path on success.
