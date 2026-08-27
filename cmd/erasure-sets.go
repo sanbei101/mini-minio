@@ -27,12 +27,25 @@ type erasureSets struct {
 
 // NewErasureSets creates an ObjectLayer backed by one or more erasure sets.
 func NewErasureSets(diskPaths []string, dataBlocks, parityBlocks int) (ObjectLayer, error) {
+	disks := make([]storage.API, len(diskPaths))
+	for i, p := range diskPaths {
+		disk, err := storage.NewDisk(p)
+		if err != nil {
+			return nil, err
+		}
+		disks[i] = disk
+	}
+	return NewErasureSetsWithDisks(disks, dataBlocks, parityBlocks)
+}
+
+// NewErasureSetsWithDisks creates an ObjectLayer from local and remote drives.
+func NewErasureSetsWithDisks(disks []storage.API, dataBlocks, parityBlocks int) (ObjectLayer, error) {
 	setDriveCount := dataBlocks + parityBlocks
 	if dataBlocks <= 0 || parityBlocks <= 0 {
 		return nil, errors.New("data and parity blocks must be positive")
 	}
-	if len(diskPaths) == 0 || len(diskPaths)%setDriveCount != 0 {
-		return nil, fmt.Errorf("need disk paths in groups of %d, got %d", setDriveCount, len(diskPaths))
+	if len(disks) == 0 || len(disks)%setDriveCount != 0 {
+		return nil, fmt.Errorf("need drives in groups of %d, got %d", setDriveCount, len(disks))
 	}
 
 	shardSize := (erasure.BlockSize + dataBlocks - 1) / dataBlocks
@@ -42,11 +55,11 @@ func NewErasureSets(diskPaths []string, dataBlocks, parityBlocks int) (ObjectLay
 	pool := bpool.NewBytePoolCap(uint64(poolSize), bufferSize, bufferSize)
 	pool.Populate()
 
-	setCount := len(diskPaths) / setDriveCount
+	setCount := len(disks) / setDriveCount
 	sets := make([]*erasureObjects, 0, setCount)
 	for i := range setCount {
 		start := i * setDriveCount
-		set, err := newErasureObjects(diskPaths[start:start+setDriveCount], dataBlocks, parityBlocks, pool)
+		set, err := newErasureObjects(disks[start:start+setDriveCount], dataBlocks, parityBlocks, pool)
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +127,7 @@ func (s *erasureSets) DeleteBucket(ctx context.Context, bucket string) error {
 }
 
 func (s *erasureSets) ListObjectsV2(
-	ctx context.Context,
+	_ context.Context,
 	bucket, prefix, continuationToken, delimiter string,
 	maxKeys int,
 	startAfter string,
@@ -202,6 +215,31 @@ func (s *erasureSets) DeleteObject(ctx context.Context, bucket, object string) (
 	return s.setForObject(object).DeleteObject(ctx, bucket, object)
 }
 
+func (s *erasureSets) NewMultipartUpload(ctx context.Context, bucket, object string) (string, error) {
+	return s.setForObject(object).NewMultipartUpload(ctx, bucket, object)
+}
+
+func (s *erasureSets) PutObjectPart(
+	ctx context.Context,
+	bucket, object, uploadID string,
+	partNumber int,
+	data *PutObjReader,
+) (ObjectPartInfo, error) {
+	return s.setForObject(object).PutObjectPart(ctx, bucket, object, uploadID, partNumber, data)
+}
+
+func (s *erasureSets) CompleteMultipartUpload(
+	ctx context.Context,
+	bucket, object, uploadID string,
+	partNumbers []int,
+) (ObjectInfo, error) {
+	return s.setForObject(object).CompleteMultipartUpload(ctx, bucket, object, uploadID, partNumbers)
+}
+
+func (s *erasureSets) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {
+	return s.setForObject(object).AbortMultipartUpload(ctx, bucket, object, uploadID)
+}
+
 func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 	seen := map[string]bool{}
 	names := []string{}
@@ -211,7 +249,7 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 		names []string
 		err   error
 	}
-	var disks []*storage.Disk
+	var disks []storage.API
 	for _, set := range s.sets {
 		disks = append(disks, set.disks...)
 	}
@@ -219,7 +257,7 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 	var wg sync.WaitGroup
 	for i, disk := range disks {
 		wg.Add(1)
-		go func(idx int, d *storage.Disk) {
+		go func(idx int, d storage.API) {
 			defer wg.Done()
 			diskNames, err := d.ListObjects(bucket, prefix)
 			results[idx] = result{names: diskNames, err: err}

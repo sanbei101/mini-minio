@@ -1,15 +1,16 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 	"uuid"
@@ -40,7 +41,7 @@ type xlMeta struct {
 
 // erasureObjects implements ObjectLayer using erasure coding across multiple disks.
 type erasureObjects struct {
-	disks         []*storage.Disk
+	disks         []storage.API
 	dataBlocks    int
 	parityBlocks  int
 	pool          *bpool.BytePoolCap
@@ -50,18 +51,10 @@ type erasureObjects struct {
 }
 
 func newErasureObjects(
-	diskPaths []string,
+	disks []storage.API,
 	dataBlocks, parityBlocks int,
 	pool *bpool.BytePoolCap,
 ) (*erasureObjects, error) {
-	disks := make([]*storage.Disk, len(diskPaths))
-	for i, p := range diskPaths {
-		d, err := storage.NewDisk(p)
-		if err != nil {
-			return nil, err
-		}
-		disks[i] = d
-	}
 	engine, err := erasure.New(dataBlocks, parityBlocks, pool)
 	if err != nil {
 		return nil, err
@@ -124,7 +117,7 @@ func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 	var wg sync.WaitGroup
 	for i, disk := range e.disks {
 		wg.Add(1)
-		go func(idx int, d *storage.Disk) {
+		go func(idx int, d storage.API) {
 			defer wg.Done()
 			infos, err := d.ListBuckets()
 			if err != nil {
@@ -162,14 +155,14 @@ func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 	return mergeBucketInfos(perDisk), nil
 }
 
-func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {
+func (e *erasureObjects) MakeBucket(_ context.Context, bucket string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	errs := make([]error, len(e.disks))
 	var wg sync.WaitGroup
 	for i, d := range e.disks {
 		wg.Add(1)
-		go func(idx int, disk *storage.Disk) {
+		go func(idx int, disk storage.API) {
 			defer wg.Done()
 			err := disk.MakeBucket(bucket)
 			if errors.Is(err, storage.ErrBucketExists) {
@@ -187,7 +180,7 @@ func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {
 	return nil
 }
 
-func (e *erasureObjects) GetBucketInfo(ctx context.Context, bucket string) (BucketInfo, error) {
+func (e *erasureObjects) GetBucketInfo(_ context.Context, bucket string) (BucketInfo, error) {
 	fi, err := e.statBucket(bucket)
 	if errors.Is(err, storage.ErrNotFound) {
 		return BucketInfo{}, ErrBucketNotFound
@@ -198,7 +191,7 @@ func (e *erasureObjects) GetBucketInfo(ctx context.Context, bucket string) (Buck
 	return BucketInfo{Name: bucket, Created: fi.ModTime()}, nil
 }
 
-func (e *erasureObjects) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
+func (e *erasureObjects) ListBuckets(_ context.Context) ([]BucketInfo, error) {
 	return e.listBucketInfos()
 }
 
@@ -209,7 +202,7 @@ func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error 
 	errs := make([]error, len(e.disks))
 	for i, d := range e.disks {
 		wg.Add(1)
-		go func(idx int, disk *storage.Disk) {
+		go func(idx int, disk storage.API) {
 			defer wg.Done()
 			err := disk.DeleteBucket(bucket)
 			if os.IsNotExist(err) {
@@ -237,23 +230,65 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		return ObjectInfo{}, err
 	}
 
-	enc := e.erasureEngine
-
 	dataDir := uuid.New().String()
+	n, err := e.writePart(ctx, bucket, object, dataDir, 1, data)
+	if err != nil {
+		e.cleanupObjectData(bucket, object, dataDir, nil)
+		return ObjectInfo{}, err
+	}
+
+	etag := data.MD5()
+	now := time.Now().UTC()
+	meta := xlMeta{
+		Name:         object,
+		Bucket:       bucket,
+		Size:         n,
+		ModTime:      now,
+		ETag:         etag,
+		ContentType:  "application/octet-stream",
+		DataDir:      dataDir,
+		DataBlocks:   e.dataBlocks,
+		ParityBlocks: e.parityBlocks,
+		BlockSize:    erasure.BlockSize,
+		Parts:        []ObjectPartInfo{{Number: 1, Size: e.erasureEngine.ShardFileSize(n), ActualSize: n}},
+	}
+	if err := e.commitMeta(ctx, bucket, object, oldMeta, meta); err != nil {
+		return ObjectInfo{}, err
+	}
+
+	return ObjectInfo{
+		Bucket:      bucket,
+		Name:        object,
+		Size:        n,
+		ModTime:     now,
+		ETag:        etag,
+		ContentType: meta.ContentType,
+	}, nil
+}
+
+func (e *erasureObjects) writePart(
+	ctx context.Context,
+	bucket, object, dataDir string,
+	partNum int,
+	data *PutObjReader,
+) (int64, error) {
+	enc := e.erasureEngine
 	writers := make([]io.Writer, len(e.disks))
-	files := make([]*os.File, len(e.disks))
+	files := make([]storage.ShardWriter, len(e.disks))
 
 	for i, d := range e.disks {
-		f, ferr := d.CreateShardFile(bucket, object, dataDir, 1)
+		f, ferr := d.CreateShardFile(ctx, bucket, object, dataDir, partNum)
 		if ferr != nil {
 			for j := range i {
-				files[j].Close()
+				err := files[j].Close()
+				if err != nil {
+					log.Error().Err(err).Msg("failed to close shard file")
+				}
 			}
-			e.cleanupObjectData(bucket, object, dataDir, nil)
-			return ObjectInfo{}, ferr
+			return 0, ferr
 		}
-		files[i] = f
-		writers[i] = f
+		files[i] = storage.NewBufferedShardWriter(f, 2)
+		writers[i] = files[i]
 	}
 
 	writeQuorum := e.dataBlocks
@@ -273,47 +308,42 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 
 	n, encErr := enc.Encode(ctx, data, writers, buffer, writeQuorum)
 	for _, f := range files {
-		f.Close()
+		if closeErr := f.Close(); encErr == nil && closeErr != nil {
+			encErr = closeErr
+		}
 	}
 	if encErr != nil {
-		e.cleanupObjectData(bucket, object, dataDir, nil)
-		return ObjectInfo{}, encErr
+		return 0, encErr
 	}
+	return n, nil
+}
 
-	etag := data.MD5()
-	now := time.Now().UTC()
-	contentType := "application/octet-stream"
-
-	meta := xlMeta{
-		Name:         object,
-		Bucket:       bucket,
-		Size:         n,
-		ModTime:      now,
-		ETag:         etag,
-		ContentType:  contentType,
-		DataDir:      dataDir,
-		DataBlocks:   e.dataBlocks,
-		ParityBlocks: e.parityBlocks,
-		BlockSize:    erasure.BlockSize,
-		Parts:        []ObjectPartInfo{{Number: 1, Size: enc.ShardFileSize(n), ActualSize: n}},
+func (e *erasureObjects) commitMeta(ctx context.Context, bucket, object string, oldMeta *xlMeta, meta xlMeta) error {
+	writeQuorum := e.dataBlocks
+	if e.dataBlocks == e.parityBlocks {
+		writeQuorum++
 	}
 
 	// Write-then-rename: write tmp files in parallel, then rename atomically.
-	tmpPaths := make([]string, len(e.disks))
+	tmpWritten := make([]bool, len(e.disks))
 	var wg sync.WaitGroup
 	metaErrs := make([]error, len(e.disks))
 	for i, d := range e.disks {
 		wg.Add(1)
-		go func(idx int, disk *storage.Disk) {
+		go func(idx int, disk storage.API) {
 			defer wg.Done()
 			m := meta
 			m.DiskIndex = idx
-			tmp, err := disk.WriteMetaTmp(bucket, object, &m)
+			data, err := json.Marshal(&m)
 			if err != nil {
 				metaErrs[idx] = err
 				return
 			}
-			tmpPaths[idx] = tmp
+			if err := disk.WriteMetaTmp(bucket, object, data); err != nil {
+				metaErrs[idx] = err
+				return
+			}
+			tmpWritten[idx] = true
 		}(i, d)
 	}
 	wg.Wait()
@@ -325,25 +355,19 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		}
 	}
 	if writeOK < writeQuorum {
-		// Cleanup tmp files.
-		for _, tmp := range tmpPaths {
-			if tmp != "" {
-				os.Remove(tmp)
-			}
-		}
-		e.cleanupObjectData(bucket, object, dataDir, nil)
-		return ObjectInfo{}, fmt.Errorf("metadata write quorum not met (%d/%d)", writeOK, writeQuorum)
+		e.cleanupObjectData(bucket, object, meta.DataDir, nil)
+		return fmt.Errorf("metadata write quorum not met (%d/%d)", writeOK, writeQuorum)
 	}
 
 	// Rename tmp -> final in parallel.
 	var renameWg sync.WaitGroup
 	renameErrs := make([]error, len(e.disks))
 	for i, d := range e.disks {
-		if tmpPaths[i] == "" {
+		if !tmpWritten[i] {
 			continue
 		}
 		renameWg.Add(1)
-		go func(idx int, disk *storage.Disk) {
+		go func(idx int, disk storage.API) {
 			defer renameWg.Done()
 			renameErrs[idx] = disk.RenameMeta(bucket, object)
 		}(i, d)
@@ -352,41 +376,25 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 	renamed := make([]bool, len(e.disks))
 	renameOK := 0
 	for i, err := range renameErrs {
-		if tmpPaths[i] == "" || err != nil {
+		if !tmpWritten[i] || err != nil {
 			continue
 		}
 		renamed[i] = true
 		renameOK++
 	}
-	if oldMeta != nil && oldMeta.DataDir != dataDir {
+	if oldMeta != nil && oldMeta.DataDir != meta.DataDir {
 		e.cleanupObjectData(bucket, object, oldMeta.DataDir, renamed)
 	}
 
-	for i, tmp := range tmpPaths {
-		if !renamed[i] && tmp != "" {
-			err := os.Remove(tmp)
-			if err != nil {
-				log.Warn().Err(err).Msgf("failed to remove tmp file %s", tmp)
-			}
-		}
-	}
 	uncommitted := make([]bool, len(e.disks))
 	for i := range uncommitted {
 		uncommitted[i] = !renamed[i]
 	}
-	e.cleanupObjectData(bucket, object, dataDir, uncommitted)
+	e.cleanupObjectData(bucket, object, meta.DataDir, uncommitted)
 	if renameOK < writeQuorum {
-		return ObjectInfo{}, fmt.Errorf("metadata rename quorum not met (%d/%d)", renameOK, writeQuorum)
+		return fmt.Errorf("metadata rename quorum not met (%d/%d)", renameOK, writeQuorum)
 	}
-
-	return ObjectInfo{
-		Bucket:      bucket,
-		Name:        object,
-		Size:        n,
-		ModTime:     now,
-		ETag:        etag,
-		ContentType: contentType,
-	}, nil
+	return nil
 }
 
 func (e *erasureObjects) objectLock(bucket, object string) *sync.Mutex {
@@ -402,7 +410,7 @@ func (e *erasureObjects) cleanupObjectData(bucket, object, dataDir string, selec
 			continue
 		}
 		wg.Add(1)
-		go func(d *storage.Disk) {
+		go func(d storage.API) {
 			defer wg.Done()
 			if err := d.DeleteObjectData(bucket, object, dataDir); err != nil {
 				log.Warn().Err(err).Str("bucket", bucket).Str("object", object).Msg("object data cleanup failed")
@@ -439,18 +447,6 @@ func (e *erasureObjects) GetObjectNInfo(
 
 	enc := e.erasureEngine
 
-	readers := make([]io.ReaderAt, len(e.disks))
-	closers := make([]io.Closer, len(e.disks))
-	for i, d := range e.disks {
-		rc, ferr := d.ReadShardFile(bucket, object, meta.DataDir, 1)
-		if ferr == nil {
-			if rat, ok := rc.(io.ReaderAt); ok {
-				readers[i] = rat
-				closers[i] = rc
-			}
-		}
-	}
-
 	offset, length := int64(0), meta.Size
 	if rs != nil {
 		offset, length, err = rs.GetOffsetLength(meta.Size)
@@ -461,13 +457,8 @@ func (e *erasureObjects) GetObjectNInfo(
 
 	pr, pw := io.Pipe()
 	go func() {
-		decErr := enc.Decode(ctx, pw, readers, offset, length, meta.Size)
+		decErr := e.decodeObject(ctx, pw, meta, offset, length, enc)
 		pw.CloseWithError(decErr)
-		for _, c := range closers {
-			if c != nil {
-				c.Close()
-			}
-		}
 	}()
 
 	objInfo := ObjectInfo{
@@ -479,6 +470,66 @@ func (e *erasureObjects) GetObjectNInfo(
 		ContentType: meta.ContentType,
 	}
 	return &GetObjectReader{Reader: pr, ObjInfo: objInfo}, nil
+}
+
+func (e *erasureObjects) decodeObject(
+	ctx context.Context,
+	dst io.Writer,
+	meta *xlMeta,
+	offset, length int64,
+	enc erasure.Erasure,
+) error {
+	if len(meta.Parts) <= 1 {
+		readers, closers := e.openShardReaders(ctx, meta.Bucket, meta.Name, meta.DataDir, 1)
+		defer closeShardReaders(closers)
+		return enc.Decode(ctx, dst, readers, offset, length, meta.Size)
+	}
+
+	var objectOffset int64
+	requestEnd := offset + length
+	for _, part := range meta.Parts {
+		partStart := objectOffset
+		partEnd := partStart + part.ActualSize
+		objectOffset = partEnd
+		start := max(offset, partStart)
+		end := min(requestEnd, partEnd)
+		if start >= end {
+			continue
+		}
+
+		readers, closers := e.openShardReaders(ctx, meta.Bucket, meta.Name, meta.DataDir, part.Number)
+		err := enc.Decode(ctx, dst, readers, start-partStart, end-start, part.ActualSize)
+		closeShardReaders(closers)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *erasureObjects) openShardReaders(
+	ctx context.Context,
+	bucket, object, dataDir string,
+	partNumber int,
+) ([]io.ReaderAt, []io.Closer) {
+	readers := make([]io.ReaderAt, len(e.disks))
+	closers := make([]io.Closer, len(e.disks))
+	for i, disk := range e.disks {
+		reader, err := disk.ReadShardFile(ctx, bucket, object, dataDir, partNumber)
+		if err == nil {
+			readers[i] = reader
+			closers[i] = reader
+		}
+	}
+	return readers, closers
+}
+
+func closeShardReaders(closers []io.Closer) {
+	for _, closer := range closers {
+		if closer != nil {
+			_ = closer.Close()
+		}
+	}
 }
 
 func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string) (ObjectInfo, error) {
@@ -499,7 +550,7 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 	var wg sync.WaitGroup
 	for i, d := range disks {
 		wg.Add(1)
-		go func(idx int, disk *storage.Disk) {
+		go func(idx int, disk storage.API) {
 			defer wg.Done()
 
 			if ctx.Err() != nil {
@@ -546,10 +597,15 @@ func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
 	var wg sync.WaitGroup
 	for i, d := range e.disks {
 		wg.Add(1)
-		go func(idx int, disk *storage.Disk) {
+		go func(idx int, disk storage.API) {
 			defer wg.Done()
 			var m xlMeta
-			if err := disk.ReadMeta(bucket, object, &m); err != nil {
+			data, err := disk.ReadMeta(bucket, object)
+			if err != nil {
+				errs[idx] = err
+				return
+			}
+			if err := json.Unmarshal(data, &m); err != nil {
 				errs[idx] = err
 				return
 			}
@@ -609,96 +665,221 @@ func (rs *HTTPRangeSpec) GetOffsetLength(size int64) (int64, int64, error) {
 
 // --- Multipart upload ---
 
-type multipartUpload struct {
-	bucket string
-	object string
-	parts  map[int][]byte
-	etags  map[int]string
-	mu     sync.Mutex
+type multipartState struct {
+	Bucket  string `json:"bucket"`
+	Object  string `json:"object"`
+	DataDir string `json:"dataDir"`
 }
 
-var (
-	multipartMu      sync.Mutex
-	multipartUploads = map[string]*multipartUpload{}
-)
-
-func newMultipartUpload(bucket, object string) string {
-	id := uuid.New().String()
-	multipartMu.Lock()
-	multipartUploads[id] = &multipartUpload{
-		bucket: bucket,
-		object: object,
-		parts:  map[int][]byte{},
-		etags:  map[int]string{},
-	}
-	multipartMu.Unlock()
-	return id
-}
-
-func uploadPart(uploadID string, partNumber int, r io.Reader) (string, error) {
-	multipartMu.Lock()
-	up, ok := multipartUploads[uploadID]
-	multipartMu.Unlock()
-	if !ok {
-		return "", fmt.Errorf("upload not found: %s", uploadID)
-	}
-
-	data, err := io.ReadAll(r)
-	if err != nil {
+func (e *erasureObjects) NewMultipartUpload(ctx context.Context, bucket, object string) (string, error) {
+	if _, err := e.GetBucketInfo(ctx, bucket); err != nil {
 		return "", err
 	}
-	h := md5.Sum(data)
-	etag := hex.EncodeToString(h[:])
-
-	up.mu.Lock()
-	up.parts[partNumber] = data
-	up.etags[partNumber] = etag
-	up.mu.Unlock()
-	return etag, nil
+	uploadID := uuid.New().String()
+	state := multipartState{Bucket: bucket, Object: object, DataDir: uuid.New().String()}
+	if err := e.writeUploadMeta(bucket, object, uploadID, "state", state); err != nil {
+		return "", err
+	}
+	return uploadID, nil
 }
 
-func completeMultipartUpload(
+func (e *erasureObjects) PutObjectPart(
 	ctx context.Context,
-	ol ObjectLayer,
-	uploadID string,
+	bucket, object, uploadID string,
+	partNumber int,
+	data *PutObjReader,
+) (ObjectPartInfo, error) {
+	if partNumber < 1 {
+		return ObjectPartInfo{}, errors.New("invalid part number")
+	}
+	state, err := e.readMultipartState(bucket, object, uploadID)
+	if err != nil {
+		return ObjectPartInfo{}, err
+	}
+	n, err := e.writePart(ctx, bucket, object, state.DataDir, partNumber, data)
+	if err != nil {
+		return ObjectPartInfo{}, err
+	}
+	part := ObjectPartInfo{
+		ETag:       data.MD5(),
+		Number:     partNumber,
+		Size:       e.erasureEngine.ShardFileSize(n),
+		ActualSize: n,
+		ModTime:    time.Now().UTC(),
+	}
+	if err := e.writeUploadMeta(bucket, object, uploadID, multipartPartName(partNumber), part); err != nil {
+		return ObjectPartInfo{}, err
+	}
+	return part, nil
+}
+
+func (e *erasureObjects) CompleteMultipartUpload(
+	ctx context.Context,
+	bucket, object, uploadID string,
 	partNumbers []int,
 ) (ObjectInfo, error) {
-	multipartMu.Lock()
-	up, ok := multipartUploads[uploadID]
-	multipartMu.Unlock()
-	if !ok {
-		return ObjectInfo{}, fmt.Errorf("upload not found: %s", uploadID)
-	}
+	lock := e.objectLock(bucket, object)
+	lock.Lock()
+	defer lock.Unlock()
 
-	up.mu.Lock()
-	var buf bytes.Buffer
-	for _, n := range partNumbers {
-		p, exists := up.parts[n]
-		if !exists {
-			up.mu.Unlock()
-			return ObjectInfo{}, fmt.Errorf("part %d not found", n)
+	state, err := e.readMultipartState(bucket, object, uploadID)
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	parts := make([]ObjectPartInfo, 0, len(partNumbers))
+	seen := make(map[int]bool, len(partNumbers))
+	var size int64
+	for _, number := range partNumbers {
+		if seen[number] {
+			return ObjectInfo{}, fmt.Errorf("part %d selected more than once", number)
 		}
-		buf.Write(p)
+		seen[number] = true
+		part, err := e.readMultipartPart(bucket, object, uploadID, number)
+		if err != nil {
+			return ObjectInfo{}, err
+		}
+		parts = append(parts, part)
+		size += part.ActualSize
 	}
-	up.mu.Unlock()
+	if len(parts) == 0 {
+		return ObjectInfo{}, errors.New("multipart upload has no parts")
+	}
 
-	r, err := NewPutObjReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
+	oldMeta, err := e.readMeta(bucket, object)
+	if err != nil && !errors.Is(err, ErrObjectNotFound) {
 		return ObjectInfo{}, err
 	}
-	info, err := ol.PutObject(ctx, up.bucket, up.object, r)
-	if err != nil {
+	now := time.Now().UTC()
+	etag := multipartETag(parts)
+	meta := xlMeta{
+		Name:         object,
+		Bucket:       bucket,
+		Size:         size,
+		ModTime:      now,
+		ETag:         etag,
+		ContentType:  "application/octet-stream",
+		DataDir:      state.DataDir,
+		DataBlocks:   e.dataBlocks,
+		ParityBlocks: e.parityBlocks,
+		BlockSize:    erasure.BlockSize,
+		Parts:        parts,
+	}
+	if err := e.commitMeta(ctx, bucket, object, oldMeta, meta); err != nil {
 		return ObjectInfo{}, err
 	}
-
-	multipartMu.Lock()
-	delete(multipartUploads, uploadID)
-	multipartMu.Unlock()
-	return info, nil
+	if err := e.deleteUpload(bucket, object, uploadID); err != nil {
+		return ObjectInfo{}, err
+	}
+	return ObjectInfo{
+		Bucket:      bucket,
+		Name:        object,
+		Size:        size,
+		ModTime:     now,
+		ETag:        etag,
+		ContentType: meta.ContentType,
+		Parts:       parts,
+	}, nil
 }
 
-func abortMultipartUpload(uploadID string) {
-	multipartMu.Lock()
-	delete(multipartUploads, uploadID)
-	multipartMu.Unlock()
+func (e *erasureObjects) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {
+	state, err := e.readMultipartState(bucket, object, uploadID)
+	if err != nil {
+		return err
+	}
+	e.cleanupObjectData(bucket, object, state.DataDir, nil)
+	return e.deleteUpload(bucket, object, uploadID)
+}
+
+func (e *erasureObjects) writeUploadMeta(bucket, object, uploadID, name string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	errs := make([]error, len(e.disks))
+	var wg sync.WaitGroup
+	for i, disk := range e.disks {
+		wg.Add(1)
+		go func(index int, drive storage.API) {
+			defer wg.Done()
+			errs[index] = drive.WriteUploadMeta(bucket, object, uploadID, name, data)
+		}(i, disk)
+	}
+	wg.Wait()
+	return e.checkWriteQuorum(errs, "upload metadata")
+}
+
+func (e *erasureObjects) readMultipartState(bucket, object, uploadID string) (multipartState, error) {
+	var state multipartState
+	if err := e.readUploadMeta(bucket, object, uploadID, "state", &state); err != nil {
+		return multipartState{}, err
+	}
+	if state.Bucket != bucket || state.Object != object || state.DataDir == "" {
+		return multipartState{}, errors.New("invalid multipart upload")
+	}
+	return state, nil
+}
+
+func (e *erasureObjects) readMultipartPart(bucket, object, uploadID string, partNumber int) (ObjectPartInfo, error) {
+	var part ObjectPartInfo
+	if err := e.readUploadMeta(bucket, object, uploadID, multipartPartName(partNumber), &part); err != nil {
+		return ObjectPartInfo{}, err
+	}
+	if part.Number != partNumber {
+		return ObjectPartInfo{}, errors.New("invalid multipart part")
+	}
+	return part, nil
+}
+
+func (e *erasureObjects) readUploadMeta(bucket, object, uploadID, name string, out any) error {
+	for _, disk := range e.disks {
+		data, err := disk.ReadUploadMeta(bucket, object, uploadID, name)
+		if err == nil {
+			return json.Unmarshal(data, out)
+		}
+	}
+	return errors.New("multipart upload not found")
+}
+
+func (e *erasureObjects) deleteUpload(bucket, object, uploadID string) error {
+	errs := make([]error, len(e.disks))
+	var wg sync.WaitGroup
+	for i, disk := range e.disks {
+		wg.Add(1)
+		go func(index int, drive storage.API) {
+			defer wg.Done()
+			errs[index] = drive.DeleteUpload(bucket, object, uploadID)
+		}(i, disk)
+	}
+	wg.Wait()
+	return e.checkWriteQuorum(errs, "upload deletion")
+}
+
+func (e *erasureObjects) checkWriteQuorum(errs []error, operation string) error {
+	quorum := e.dataBlocks
+	if e.dataBlocks == e.parityBlocks {
+		quorum++
+	}
+	ok := 0
+	for _, err := range errs {
+		if err == nil {
+			ok++
+		}
+	}
+	if ok < quorum {
+		return fmt.Errorf("%s quorum not met (%d/%d)", operation, ok, quorum)
+	}
+	return nil
+}
+
+func multipartPartName(number int) string { return "part-" + strconv.Itoa(number) }
+
+func multipartETag(parts []ObjectPartInfo) string {
+	hash := md5.New()
+	for _, part := range parts {
+		decoded, err := hex.DecodeString(part.ETag)
+		if err == nil {
+			_, _ = hash.Write(decoded)
+		}
+	}
+	return fmt.Sprintf("%x-%d", hash.Sum(nil), len(parts))
 }

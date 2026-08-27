@@ -129,7 +129,7 @@ func (mw *multiWriter) Write(blocks [][]byte) error {
 // Encode reads from src, erasure-encodes each block, and writes shards to writers.
 // buf is an externally-provided buffer (from pool) sized to BlockSize.
 func (e *Erasure) Encode(
-	ctx context.Context,
+	_ context.Context,
 	src io.Reader,
 	writers []io.Writer,
 	buf []byte,
@@ -327,7 +327,7 @@ func (p *parallelReader) Read(dst [][]byte) ([][]byte, error) {
 // Decode reads shards from readers in parallel and reconstructs the original data.
 // offset and length refer to the original (pre-erasure) byte range.
 func (e *Erasure) Decode(
-	ctx context.Context,
+	_ context.Context,
 	writer io.Writer,
 	readers []io.ReaderAt,
 	offset, length, totalLength int64,

@@ -7,6 +7,124 @@ on:
     branches: [ main ]
 
 jobs:
+  cluster-integration:
+    name: Distributed Cluster Integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Install mc and zip
+        run: |
+          wget https://dl.min.io/client/mc/release/linux-amd64/mc -O mc
+          chmod +x mc
+          sudo mv mc /usr/local/bin/
+          sudo apt update
+          sudo apt install --yes zip
+
+      - name: Start two-node erasure cluster
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+          GOAMD64: v3
+        run: |
+          set -euo pipefail
+          go build -trimpath -ldflags="-s -w" -o mini-minio .
+
+          root="$RUNNER_TEMP/mini-minio-cluster"
+          mkdir -p "$root/a1" "$root/a2" "$root/b1" "$root/b2"
+
+          endpoints=(
+            "http://127.0.0.1:19000$root/a1"
+            "http://127.0.0.1:19000$root/a2"
+            "http://127.0.0.1:19001$root/b1"
+            "http://127.0.0.1:19001$root/b2"
+          )
+
+          ./mini-minio \
+            --addr 127.0.0.1:19000 \
+            --node-url http://127.0.0.1:19000 \
+            --data-blocks 2 \
+            --parity-blocks 2 \
+            --cluster-secret ci-cluster-secret \
+            --endpoint "${endpoints[0]}" \
+            --endpoint "${endpoints[1]}" \
+            --endpoint "${endpoints[2]}" \
+            --endpoint "${endpoints[3]}" \
+            --access-key minioadmin \
+            --secret-key minioadmin123 > node-a.log 2>&1 &
+          echo $! > node-a.pid
+
+          ./mini-minio \
+            --addr 127.0.0.1:19001 \
+            --node-url http://127.0.0.1:19001 \
+            --data-blocks 2 \
+            --parity-blocks 2 \
+            --cluster-secret ci-cluster-secret \
+            --endpoint "${endpoints[0]}" \
+            --endpoint "${endpoints[1]}" \
+            --endpoint "${endpoints[2]}" \
+            --endpoint "${endpoints[3]}" \
+            --access-key minioadmin \
+            --secret-key minioadmin123 > node-b.log 2>&1 &
+          echo $! > node-b.pid
+
+      - name: Wait for both S3 endpoints
+        run: |
+          set -euo pipefail
+          mc alias set node-a http://127.0.0.1:19000 minioadmin minioadmin123
+          mc alias set node-b http://127.0.0.1:19001 minioadmin minioadmin123
+          for attempt in $(seq 1 30); do
+            if mc ls node-a >/dev/null 2>&1 && mc ls node-b >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat node-a.log
+          cat node-b.log
+          exit 1
+
+      - name: Test cross-node PUT and GET
+        run: |
+          set -euo pipefail
+          mc mb node-a/test-bucket
+          dd if=/dev/urandom of=payload.bin bs=1M count=8 status=none
+          zip -q -0 test.zip payload.bin
+
+          mc cp --disable-multipart test.zip node-a/test-bucket/test.zip
+          mc cp node-b/test-bucket/test.zip downloaded-from-node-b.zip
+          cmp test.zip downloaded-from-node-b.zip
+
+      - name: Test multipart across nodes
+        run: |
+          set -euo pipefail
+          dd if=/dev/urandom of=large-payload.bin bs=1M count=80 status=none
+          zip -q -0 multipart.zip large-payload.bin
+
+          mc cp multipart.zip node-b/test-bucket/multipart.zip
+          mc cp node-a/test-bucket/multipart.zip multipart-downloaded.zip
+          cmp multipart.zip multipart-downloaded.zip
+
+      - name: Stop cluster and print logs
+        if: always()
+        run: |
+          kill "$(cat node-a.pid 2>/dev/null)" 2>/dev/null || true
+          kill "$(cat node-b.pid 2>/dev/null)" 2>/dev/null || true
+          wait "$(cat node-a.pid 2>/dev/null)" 2>/dev/null || true
+          wait "$(cat node-b.pid 2>/dev/null)" 2>/dev/null || true
+          echo '--- node-a.log ---'
+          tail -n 100 node-a.log 2>/dev/null || true
+          echo '--- node-b.log ---'
+          tail -n 100 node-b.log 2>/dev/null || true
+
   warp-benchmark:
     runs-on: ubuntu-latest
 

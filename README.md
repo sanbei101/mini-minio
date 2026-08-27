@@ -12,7 +12,7 @@
 
 ---
 
-**mini-minio** 是 [MinIO](https://github.com/minio/minio) 核心功能的精简实现。保留了纠删码、并行磁盘 I/O、多集合架构等高性能设计,去掉了分布式通信、自愈、加密、IAM 等生产级复杂度--专注于**学习和理解**对象存储的核心原理。
+**mini-minio** 是 [MinIO](https://github.com/minio/minio) 核心功能的精简实现。保留了纠删码、并行磁盘 I/O、多集合架构和静态多节点分布式写入,去掉了自愈、加密、IAM 等生产级复杂度--专注于**学习和理解**对象存储的核心原理。
 
 > 如果你想了解 S3 协议、Reed-Solomon 纠删码、高并发磁盘 I/O 是如何协同工作的,这个项目就是为你准备的。
 
@@ -41,6 +41,7 @@
 - **Reed-Solomon 纠删码** - 基于 [klauspost/reedsolomon](https://github.com/klauspost/reedsolomon),数据分片存储到多块磁盘,容忍磁盘故障
 - **多集合架构** - 对象通过 CRC32 哈希分配到不同 Erasure Set,实现负载均衡
 - **并行磁盘 I/O** - 读写删查全部并行执行,通过 Quorum 机制保证一致性
+- **静态分布式纠删码** - 本地和远程 drive 统一参与 shard 写入与读取
 - **AWS Signature V4** - 支持 Header 认证和 Presigned URL,兼容标准 AWS SDK / CLI
 - **流式编解码** - 10 MiB 分块流式编码,pipe-based 并行解码,内存占用可控
 - **4K 对齐缓冲池** - channel 实现的有界缓冲池,配合纠删码库的对齐分配
@@ -68,6 +69,27 @@ go build -o mini-minio .
   --access-key minioadmin \
   --secret-key minioadmin
 ```
+
+### 两节点分布式纠删码
+
+两台机器使用相同顺序的 endpoint 列表启动,只修改 `--node-url`。下面示例
+使用 `2+2` 配置,两台机器各提供两块独立磁盘:
+
+```bash
+./mini-minio --addr :9000 \
+  --node-url http://10.0.0.11:9000 \
+  --data-blocks 2 --parity-blocks 2 \
+  --cluster-secret 'replace-with-a-shared-secret' \
+  --endpoint http://10.0.0.11:9000/mnt/mini/disk1 \
+  --endpoint http://10.0.0.11:9000/mnt/mini/disk2 \
+  --endpoint http://10.0.0.12:9000/mnt/mini/disk1 \
+  --endpoint http://10.0.0.12:9000/mnt/mini/disk2 \
+  --access-key minioadmin --secret-key minioadmin
+```
+
+节点 `10.0.0.12` 将 `--node-url` 改为 `http://10.0.0.12:9000`,其余参数
+保持不变。S3 客户端可以直接访问任意节点;收到请求的节点负责编码,并将
+shard 写入全部节点的 drive。
 
 ### 使用 MinIO 客户端测试
 
@@ -148,10 +170,14 @@ mc ls local/mybucket/
 | `--data-blocks` | `4` | 每个 Set 的数据分片数 |
 | `--parity-blocks` | `2` | 每个 Set 的校验分片数 |
 | `--sets` | `1` | Erasure Set 数量 |
+| `--node-url` | *(空)* | 当前节点 URL,集群模式必填 |
+| `--endpoint` | *(空)* | 集群 drive URL,可重复传入 |
+| `--cluster-secret` | `MINI_CLUSTER_SECRET` | 节点间 storage RPC 共享密钥 |
 | `--access-key` | *(空)* | 访问密钥(空则跳过认证) |
 | `--secret-key` | *(空)* | 秘密密钥 |
 
 > 磁盘总数 = `(data-blocks + parity-blocks) × sets`,程序会自动创建对应数量的磁盘目录。
+> 集群模式下磁盘总数由 `--endpoint` 数量决定,每台节点只负责其本机 endpoint。
 
 ## 📡 API 参考 (s3兼容)
 
@@ -267,7 +293,7 @@ go test -bench=BenchmarkErasure -benchmem ./cmd/
 | 多集合架构 | ✅ | ✅ |
 | AWS SigV4 | ✅ | ✅ |
 | 分片上传 | ✅ (内存) | ✅ (磁盘) |
-| 分布式模式 | ❌ | ✅ |
+| 分布式模式 | ✅ | ✅ |
 | 自愈 (Healing) | ❌ | ✅ |
 | 加密 (SSE) | ❌ | ✅ |
 | IAM / 策略 | ❌ | ✅ |

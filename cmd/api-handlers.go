@@ -367,7 +367,11 @@ func (a *apiHandlers) DeleteObject(w http.ResponseWriter, r *http.Request) {
 
 func (a *apiHandlers) CreateMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	bucket, object := r.PathValue("bucket"), r.PathValue("object")
-	uploadID := newMultipartUpload(bucket, object)
+	uploadID, err := a.obj.NewMultipartUpload(r.Context(), bucket, object)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
+		return
+	}
 
 	type resp struct {
 		XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
@@ -387,17 +391,34 @@ func (a *apiHandlers) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body io.Reader = r.Body
+	size := r.ContentLength
 	if strings.Contains(r.Header.Get("X-Amz-Content-Sha256"), "STREAMING-") ||
 		strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") {
 		body = httputil.NewChunkedReader(r.Body)
+		if decodedLen := r.Header.Get("X-Amz-Decoded-Content-Length"); decodedLen != "" {
+			if parsed, parseErr := strconv.ParseInt(decodedLen, 10, 64); parseErr == nil {
+				size = parsed
+			}
+		}
 	}
-
-	etag, err := uploadPart(uploadID, partNumber, body)
+	reader, err := NewPutObjReader(body, size)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "InvalidRequest", err.Error())
+		return
+	}
+	part, err := a.obj.PutObjectPart(
+		r.Context(),
+		r.PathValue("bucket"),
+		r.PathValue("object"),
+		uploadID,
+		partNumber,
+		reader,
+	)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "NoSuchUpload", err.Error())
 		return
 	}
-	w.Header().Set("ETag", `"`+etag+`"`)
+	w.Header().Set("ETag", `"`+part.ETag+`"`)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -423,7 +444,7 @@ func (a *apiHandlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Req
 		partNumbers[i] = p.PartNumber
 	}
 
-	info, err := completeMultipartUpload(r.Context(), a.obj, uploadID, partNumbers)
+	info, err := a.obj.CompleteMultipartUpload(r.Context(), bucket, object, uploadID, partNumbers)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "InternalError", err.Error())
 		return
@@ -446,7 +467,15 @@ func (a *apiHandlers) CompleteMultipartUpload(w http.ResponseWriter, r *http.Req
 
 func (a *apiHandlers) AbortMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	uploadID := r.URL.Query().Get("uploadId")
-	abortMultipartUpload(uploadID)
+	if err := a.obj.AbortMultipartUpload(
+		r.Context(),
+		r.PathValue("bucket"),
+		r.PathValue("object"),
+		uploadID,
+	); err != nil {
+		writeError(w, http.StatusNotFound, "NoSuchUpload", err.Error())
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

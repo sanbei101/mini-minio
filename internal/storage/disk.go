@@ -1,9 +1,8 @@
 package storage
 
 import (
-	"encoding/json/v2"
+	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -66,7 +65,10 @@ func (d *Disk) StatBucket(bucket string) (os.FileInfo, error) {
 }
 
 // CreateShardFile creates and returns an open file for writing a shard.
-func (d *Disk) CreateShardFile(bucket, object, dataDir string, partNum int) (*os.File, error) {
+func (d *Disk) CreateShardFile(ctx context.Context, bucket, object, dataDir string, partNum int) (ShardWriter, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(d.path, bucket, object, dataDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -75,7 +77,10 @@ func (d *Disk) CreateShardFile(bucket, object, dataDir string, partNum int) (*os
 }
 
 // ReadShardFile returns a ReaderAt for a shard file.
-func (d *Disk) ReadShardFile(bucket, object, dataDir string, partNum int) (io.ReadCloser, error) {
+func (d *Disk) ReadShardFile(ctx context.Context, bucket, object, dataDir string, partNum int) (ShardReader, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	p := filepath.Join(d.path, bucket, object, dataDir, partName(partNum))
 	f, err := os.Open(p)
 	if os.IsNotExist(err) {
@@ -92,20 +97,16 @@ func (d *Disk) DeleteObjectData(bucket, object, dataDir string) error {
 }
 
 // WriteMetaTmp writes metadata to a temporary file. Returns the tmp path on success.
-func (d *Disk) WriteMetaTmp(bucket, object string, meta any) (string, error) {
+func (d *Disk) WriteMetaTmp(bucket, object string, data []byte) error {
 	dir := filepath.Join(d.path, bucket, object)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	data, err := json.Marshal(meta)
-	if err != nil {
-		return "", err
+		return err
 	}
 	tmp := filepath.Join(dir, metaFile+".tmp")
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return "", err
+		return err
 	}
-	return tmp, nil
+	return nil
 }
 
 // RenameMeta atomically renames the temp metadata file to the final xl.meta.
@@ -116,15 +117,35 @@ func (d *Disk) RenameMeta(bucket, object string) error {
 	return os.Rename(tmp, dst)
 }
 
-func (d *Disk) ReadMeta(bucket, object string, out any) error {
+func (d *Disk) ReadMeta(bucket, object string) ([]byte, error) {
 	data, err := os.ReadFile(filepath.Join(d.path, bucket, object, metaFile))
 	if os.IsNotExist(err) {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (d *Disk) WriteUploadMeta(bucket, object, uploadID, name string, data []byte) error {
+	dir := d.uploadDir(bucket, object, uploadID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return json.Unmarshal(data, out)
+	return os.WriteFile(filepath.Join(dir, name+".json"), data, 0o644)
+}
+
+func (d *Disk) ReadUploadMeta(bucket, object, uploadID, name string) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(d.uploadDir(bucket, object, uploadID), name+".json"))
+	if os.IsNotExist(err) {
+		return nil, ErrNotFound
+	}
+	return data, err
+}
+
+func (d *Disk) DeleteUpload(bucket, object, uploadID string) error {
+	return os.RemoveAll(d.uploadDir(bucket, object, uploadID))
 }
 
 func (d *Disk) DeleteObject(bucket, object string) error {
@@ -186,4 +207,8 @@ func (d *Disk) ListObjects(bucket, prefix string) ([]string, error) {
 
 func partName(n int) string {
 	return "part." + strconv.Itoa(n)
+}
+
+func (d *Disk) uploadDir(bucket, object, uploadID string) string {
+	return filepath.Join(d.path, bucket, object, ".multipart", uploadID)
 }

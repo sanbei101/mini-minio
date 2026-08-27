@@ -22,4 +22,17 @@ type ObjectLayer interface {
 	GetObjectInfo(ctx context.Context, bucket, object string) (objInfo ObjectInfo, err error)
 	PutObject(ctx context.Context, bucket, object string, data *PutObjReader) (objInfo ObjectInfo, err error)
 	DeleteObject(ctx context.Context, bucket, object string) (ObjectInfo, error)
+	NewMultipartUpload(ctx context.Context, bucket, object string) (uploadID string, err error)
+	PutObjectPart(
+		ctx context.Context,
+		bucket, object, uploadID string,
+		partNumber int,
+		data *PutObjReader,
+	) (part ObjectPartInfo, err error)
+	CompleteMultipartUpload(
+		ctx context.Context,
+		bucket, object, uploadID string,
+		partNumbers []int,
+	) (objInfo ObjectInfo, err error)
+	AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error
 }
