@@ -45,6 +45,7 @@ type erasureObjects struct {
 	parityBlocks  int
 	pool          *bpool.BytePoolCap
 	mu            sync.Mutex
+	objectLocks   sync.Map
 	erasureEngine erasure.Erasure
 }
 
@@ -227,6 +228,15 @@ func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error 
 }
 
 func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, data *PutObjReader) (ObjectInfo, error) {
+	lock := e.objectLock(bucket, object)
+	lock.Lock()
+	defer lock.Unlock()
+
+	oldMeta, err := e.readMeta(bucket, object)
+	if err != nil && !errors.Is(err, ErrObjectNotFound) {
+		return ObjectInfo{}, err
+	}
+
 	enc := e.erasureEngine
 
 	dataDir := uuid.New().String()
@@ -239,6 +249,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 			for j := range i {
 				files[j].Close()
 			}
+			e.cleanupObjectData(bucket, object, dataDir, nil)
 			return ObjectInfo{}, ferr
 		}
 		files[i] = f
@@ -268,6 +279,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		f.Close()
 	}
 	if encErr != nil {
+		e.cleanupObjectData(bucket, object, dataDir, nil)
 		return ObjectInfo{}, encErr
 	}
 
@@ -322,6 +334,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 				os.Remove(tmp)
 			}
 		}
+		e.cleanupObjectData(bucket, object, dataDir, nil)
 		return ObjectInfo{}, fmt.Errorf("metadata write quorum not met (%d/%d)", writeOK, writeQuorum)
 	}
 
@@ -339,6 +352,35 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		}(i, d)
 	}
 	renameWg.Wait()
+	renamed := make([]bool, len(e.disks))
+	renameOK := 0
+	for i, err := range renameErrs {
+		if tmpPaths[i] == "" || err != nil {
+			continue
+		}
+		renamed[i] = true
+		renameOK++
+	}
+	if oldMeta != nil && oldMeta.DataDir != dataDir {
+		e.cleanupObjectData(bucket, object, oldMeta.DataDir, renamed)
+	}
+
+	for i, tmp := range tmpPaths {
+		if !renamed[i] && tmp != "" {
+			err := os.Remove(tmp)
+			if err != nil {
+				log.Warn().Err(err).Msgf("failed to remove tmp file %s", tmp)
+			}
+		}
+	}
+	uncommitted := make([]bool, len(e.disks))
+	for i := range uncommitted {
+		uncommitted[i] = !renamed[i]
+	}
+	e.cleanupObjectData(bucket, object, dataDir, uncommitted)
+	if renameOK < writeQuorum {
+		return ObjectInfo{}, fmt.Errorf("metadata rename quorum not met (%d/%d)", renameOK, writeQuorum)
+	}
 
 	return ObjectInfo{
 		Bucket:      bucket,
@@ -348,6 +390,29 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		ETag:        etag,
 		ContentType: contentType,
 	}, nil
+}
+
+func (e *erasureObjects) objectLock(bucket, object string) *sync.Mutex {
+	key := bucket + "\x00" + object
+	lock, _ := e.objectLocks.LoadOrStore(key, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+func (e *erasureObjects) cleanupObjectData(bucket, object, dataDir string, selected []bool) {
+	var wg sync.WaitGroup
+	for i, disk := range e.disks {
+		if selected != nil && !selected[i] {
+			continue
+		}
+		wg.Add(1)
+		go func(d *storage.Disk) {
+			defer wg.Done()
+			if err := d.DeleteObjectData(bucket, object, dataDir); err != nil {
+				log.Warn().Err(err).Str("bucket", bucket).Str("object", object).Msg("object data cleanup failed")
+			}
+		}(disk)
+	}
+	wg.Wait()
 }
 
 func (e *erasureObjects) GetObjectInfo(ctx context.Context, bucket, object string) (ObjectInfo, error) {
