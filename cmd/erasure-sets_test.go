@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/sanbei101/mini-minio/cmd"
@@ -116,6 +118,130 @@ func TestErasureSetNamespaceDoesNotDependOnFirstDisk(t *testing.T) {
 	}
 	if len(result.Objects) != 1 || result.Objects[0].Name != "object" {
 		t.Fatalf("unexpected objects: %#v", result.Objects)
+	}
+}
+
+func TestPutObjectOverwriteCleansOldData(t *testing.T) {
+	ctx := context.Background()
+	disks := make([]string, 6)
+	for i := range disks {
+		disks[i] = t.TempDir()
+	}
+
+	obj, err := cmd.NewErasureSets(disks, 4, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := obj.MakeBucket(ctx, "bucket"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, body := range []string{"first", "second"} {
+		reader, err := cmd.NewPutObjReader(bytes.NewReader([]byte(body)), int64(len(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = obj.PutObject(ctx, "bucket", "object", reader); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reader, err := obj.GetObjectNInfo(ctx, "bucket", "object", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "second" {
+		t.Fatalf("want second body, got %q", body)
+	}
+
+	for _, disk := range disks {
+		entries, err := os.ReadDir(filepath.Join(disk, "bucket", "object"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dataDirs int
+		for _, entry := range entries {
+			if entry.IsDir() {
+				dataDirs++
+			}
+		}
+		if dataDirs != 1 {
+			t.Fatalf("want one data directory on %s, got %d", disk, dataDirs)
+		}
+	}
+}
+
+func TestConcurrentPutObjectSameKey(t *testing.T) {
+	ctx := context.Background()
+	disks := make([]string, 6)
+	for i := range disks {
+		disks[i] = t.TempDir()
+	}
+
+	obj, err := cmd.NewErasureSets(disks, 4, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := obj.MakeBucket(ctx, "bucket"); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := range 8 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			body := fmt.Sprintf("body-%d", i)
+			reader, err := cmd.NewPutObjReader(bytes.NewReader([]byte(body)), int64(len(body)))
+			if err != nil {
+				errs <- err
+				return
+			}
+			_, err = obj.PutObject(ctx, "bucket", "object", reader)
+			if err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	reader, err := obj.GetObjectNInfo(ctx, "bucket", "object", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(body), "body-") {
+		t.Fatalf("unexpected body: %q", body)
+	}
+
+	for _, disk := range disks {
+		entries, err := os.ReadDir(filepath.Join(disk, "bucket", "object"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dataDirs int
+		for _, entry := range entries {
+			if entry.IsDir() {
+				dataDirs++
+			}
+		}
+		if dataDirs != 1 {
+			t.Fatalf("want one data directory on %s, got %d", disk, dataDirs)
+		}
 	}
 }
 

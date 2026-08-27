@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sanbei101/mini-minio/cmd"
@@ -27,15 +29,16 @@ func createErasureLayer(tb testing.TB, dataBlocks, parityBlocks int) cmd.ObjectL
 }
 
 // BenchmarkPutObject_SmallFile measures small file (1KB) write performance.
-// Object names are reused to minimize disk usage during benchmark.
+// The object name is reused to measure overwrite performance.
 func BenchmarkPutObject_SmallFile(b *testing.B) {
 	obj := createErasureLayer(b, 4, 2)
 	ctx := context.Background()
 	obj.MakeBucket(ctx, "bench-bucket")
+	payload := make([]byte, 1024)
 
 	b.ReportAllocs()
 	for b.Loop() {
-		data := bytes.NewReader(make([]byte, 1024))
+		data := bytes.NewReader(payload)
 		reader, _ := cmd.NewPutObjReader(data, 1024)
 		// Reuse same object name to avoid unbounded disk growth
 		_, err := obj.PutObject(ctx, "bench-bucket", "small", reader)
@@ -50,10 +53,11 @@ func BenchmarkPutObject_MediumFile(b *testing.B) {
 	obj := createErasureLayer(b, 4, 2)
 	ctx := context.Background()
 	obj.MakeBucket(ctx, "bench-bucket")
+	payload := make([]byte, 100*1024)
 
 	b.ReportAllocs()
 	for b.Loop() {
-		data := bytes.NewReader(make([]byte, 100*1024))
+		data := bytes.NewReader(payload)
 		reader, _ := cmd.NewPutObjReader(data, 100*1024)
 		_, err := obj.PutObject(ctx, "bench-bucket", "medium", reader)
 		if err != nil {
@@ -67,10 +71,11 @@ func BenchmarkPutObject_LargeFile(b *testing.B) {
 	obj := createErasureLayer(b, 4, 2)
 	ctx := context.Background()
 	obj.MakeBucket(ctx, "bench-bucket")
+	payload := make([]byte, 1024*1024)
 
 	b.ReportAllocs()
 	for b.Loop() {
-		data := bytes.NewReader(make([]byte, 1024*1024))
+		data := bytes.NewReader(payload)
 		reader, _ := cmd.NewPutObjReader(data, 1024*1024)
 		_, err := obj.PutObject(ctx, "bench-bucket", "large", reader)
 		if err != nil {
@@ -99,13 +104,12 @@ func BenchmarkGetObject(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		io.ReadAll(r.Reader)
+		io.Copy(io.Discard, r.Reader)
 		r.Close()
 	}
 }
 
-// BenchmarkPutObject_Parallel measures parallel write performance.
-// Uses fixed object names to control disk usage.
+// BenchmarkPutObject_Parallel measures parallel write performance with unique objects.
 func BenchmarkPutObject_Parallel(b *testing.B) {
 	b.Run("4+2 disks", func(b *testing.B) {
 		benchmarkPutObjectParallel(b, 4, 2)
@@ -117,20 +121,20 @@ func benchmarkPutObjectParallel(b *testing.B, dataBlocks, parityBlocks int) {
 	obj := createErasureLayer(b, dataBlocks, parityBlocks)
 	ctx := context.Background()
 	obj.MakeBucket(ctx, "bench-bucket")
+	payload := make([]byte, 20*1024)
+	var objectID atomic.Uint64
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
-		counter := 0
 		for pb.Next() {
-			data := bytes.NewReader(make([]byte, 20*1024))
+			data := bytes.NewReader(payload)
 			reader, _ := cmd.NewPutObjReader(data, 20*1024)
-			// Use counter mod 10 to reuse objects, limiting disk growth
-			_, err := obj.PutObject(ctx, "bench-bucket", "parallel-"+itoa(counter%10), reader)
+			name := "parallel-" + strconv.FormatUint(objectID.Add(1), 10)
+			_, err := obj.PutObject(ctx, "bench-bucket", name, reader)
 			if err != nil {
 				b.Fatal(err)
 			}
-			counter++
 		}
 	})
 }
@@ -168,7 +172,7 @@ func benchmarkGetObjectParallel(b *testing.B, dataBlocks, parityBlocks int) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			io.ReadAll(r.Reader)
+			io.Copy(io.Discard, r.Reader)
 			r.Close()
 			counter++
 		}
@@ -189,7 +193,9 @@ func benchmarkErasureEncode(b *testing.B, dataBlocks, parityBlocks int) {
 	}
 
 	// Use 1MB data - balances accuracy and speed
-	data := make([]byte, 1024*1024)
+	dataSize := 1024 * 1024
+	shardSize := (dataSize + dataBlocks - 1) / dataBlocks
+	data := make([]byte, dataSize, (dataBlocks+parityBlocks)*shardSize)
 	for i := range data {
 		data[i] = byte(i % 256)
 	}
