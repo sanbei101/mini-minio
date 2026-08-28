@@ -15,7 +15,9 @@ terraform {
   }
 }
 
-provider "alicloud" {}
+provider "alicloud" {
+  region  = "cn-hangzhou"
+}
 
 variable "resource_group_id" {
   type        = string
@@ -26,6 +28,7 @@ variable "resource_group_id" {
 data "alicloud_zones" "default" {
   available_resource_creation = "Instance"
   available_instance_type     = "ecs.e-c1m1.large"
+  available_disk_category     = "cloud_essd"
   spot_strategy               = "SpotAsPriceGo"
 }
 
@@ -91,7 +94,7 @@ resource "alicloud_instance" "spot_nodes" {
   availability_zone          = data.alicloud_zones.default.zones[0].id
   security_groups            = [alicloud_security_group.sg.id]
   instance_type              = "ecs.e-c1m1.large"
-  system_disk_category       = "cloud_essd_entry"
+  system_disk_category       = "cloud_essd"
   system_disk_size           = 20
   image_id                   = data.alicloud_images.ubuntu.images[0].id
   instance_name              = "spot-cluster-node-${count.index}"
