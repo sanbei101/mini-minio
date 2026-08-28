@@ -13,6 +13,7 @@ linters:
     - modernize
     - revive
     - bodyclose
+    - usestdlibvars
   settings:
     gocritic:
       enabled-tags:
@@ -47,12 +48,9 @@ formatters:
         - Default
         - Prefix(github.com/sanbei101/mini-minio)
     gofumpt:
-      extra-rules: true
       module-path: "github.com/sanbei101/mini-minio"
-
+      extra:
+        group-params: true
     golines:
       max-len: 120
       shorten-comments: true
-  exclusions:
-    paths:
-      - "copy"
