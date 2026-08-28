@@ -405,7 +405,7 @@ func (a *apiHandlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 		Message string `xml:"Message"`
 	}
 	type deleteResponse struct {
-		XMLName xml.Name       `xml:"DeleteResult"`
+		XMLName xml.Name        `xml:"DeleteResult"`
 		Deleted []deletedObject `xml:"Deleted,omitempty"`
 		Errors  []deleteError   `xml:"Error,omitempty"`
 	}

@@ -242,6 +242,9 @@ go test -bench=. -benchmem ./cmd/
 go test -bench=BenchmarkPutObject -benchmem ./cmd/
 go test -bench=BenchmarkGetObject -benchmem ./cmd/
 go test -bench=BenchmarkErasure -benchmem ./cmd/
+
+# 运行两节点集群基准
+go test -run '^$' -bench=BenchmarkCluster -benchmem ./cmd/
 ```
 
 **内置基准测试项:**
@@ -258,6 +261,10 @@ go test -bench=BenchmarkErasure -benchmem ./cmd/
 | `BenchmarkErasureDecode` | 原始解码(4+2) |
 | `BenchmarkListObjects` | 列举 100 个对象 |
 | `BenchmarkDiskWriteComparison` | 2+1 / 4+2 / 6+2 写入对比 |
+| `BenchmarkClusterPut` | 两节点 2+2 跨节点对象写入 |
+| `BenchmarkClusterPutParallel` | A/B 节点并发编码和写入 |
+| `BenchmarkClusterGetParallel` | A/B 节点并发读取和解码 |
+| `BenchmarkClusterMultipartParallel` | 两节点交替上传 multipart parts |
 
 ## 🗺️ 路线图
 
