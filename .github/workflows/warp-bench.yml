@@ -232,3 +232,166 @@ jobs:
         run: |
           pkill mini-minio || true
           tail -n 100 server.log
+
+  # =========================================================================
+  # 真实环境阶段：前置测试全部成功后拉起阿里云两台机器进行真实内网压测
+  # =========================================================================
+  aliyun-real-cluster-benchmark:
+    name: Real Cluster Benchmark on AliCloud
+    needs: [cluster-integration, warp-benchmark]
+    runs-on: ubuntu-latest
+    env:
+      ALICLOUD_ACCESS_KEY: ${{ secrets.ALICLOUD_ACCESS_KEY }}
+      ALICLOUD_SECRET_KEY: ${{ secrets.ALICLOUD_SECRET_KEY }}
+      ALICLOUD_REGION: ${{ secrets.ALICLOUD_REGION || 'cn-hangzhou' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 'stable'
+          cache: true
+
+      - name: Build mini-minio Binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+          GOAMD64: v3
+        run: go build -trimpath -ldflags="-s -w" -o mini-minio .
+
+
+      - name: Download Warp Package
+        run: |
+          wget https://dl.min.io/aistor/warp/release/linux-amd64/warp.deb -O warp.deb
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Apply
+        working-directory: .github
+        run: |
+          set -euo pipefail
+          terraform init -upgrade
+          terraform apply -auto-approve
+
+          NODE0_PUB=$(terraform output -json node_ips | jq -r '.node_0.public_ip')
+          NODE0_PRIV=$(terraform output -json node_ips | jq -r '.node_0.private_ip')
+          NODE1_PUB=$(terraform output -json node_ips | jq -r '.node_1.public_ip')
+          NODE1_PRIV=$(terraform output -json node_ips | jq -r '.node_1.private_ip')
+
+          echo "NODE0_PUB=$NODE0_PUB" >> $GITHUB_ENV
+          echo "NODE0_PRIV=$NODE0_PRIV" >> $GITHUB_ENV
+          echo "NODE1_PUB=$NODE1_PUB" >> $GITHUB_ENV
+          echo "NODE1_PRIV=$NODE1_PRIV" >> $GITHUB_ENV
+
+      - name: Wait for SSH Readiness
+        working-directory: .github
+        run: |
+          set -euo pipefail
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -i id_rsa_spot"
+
+          wait_node() {
+            local ip=$1
+            for attempt in $(seq 1 45); do
+              if ssh $SSH_OPTS root@$ip "echo ok" >/dev/null 2>&1; then
+                echo "Node $ip SSH is ready."
+                return 0
+              fi
+              echo "Waiting for $ip SSH (attempt $attempt/45)..."
+              sleep 3
+            done
+            echo "SSH connection failed on $ip"
+            return 1
+          }
+
+          wait_node "$NODE0_PUB"
+          wait_node "$NODE1_PUB"
+
+      - name: Deploy mini-minio Cluster to ECS
+        working-directory: .github
+        run: |
+          set -euo pipefail
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i id_rsa_spot"
+
+          for IP in "$NODE0_PUB" "$NODE1_PUB"; do
+            scp $SSH_OPTS mini-minio warp.deb root@$IP:/root/
+            ssh $SSH_OPTS root@$IP "dpkg -i /root/warp.deb && mkdir -p /data/d1 /data/d2"
+          done
+
+          ENDPOINTS="--endpoint http://${NODE0_PRIV}:9000/data/d1 --endpoint http://${NODE0_PRIV}:9000/data/d2 --endpoint http://${NODE1_PRIV}:9000/data/d1 --endpoint http://${NODE1_PRIV}:9000/data/d2"
+
+          ssh $SSH_OPTS root@$NODE0_PUB "nohup /root/mini-minio \
+            --addr :9000 \
+            --node-url http://${NODE0_PRIV}:9000 \
+            --cluster-secret aliyun-cluster-secret \
+            --data-blocks 2 \
+            --parity-blocks 2 \
+            $ENDPOINTS \
+            --access-key minioadmin \
+            --secret-key minioadmin123 > /root/mini-minio.log 2>&1 &"
+
+          ssh $SSH_OPTS root@$NODE1_PUB "nohup /root/mini-minio \
+            --addr :9000 \
+            --node-url http://${NODE1_PRIV}:9000 \
+            --cluster-secret aliyun-cluster-secret \
+            --data-blocks 2 \
+            --parity-blocks 2 \
+            $ENDPOINTS \
+            --access-key minioadmin \
+            --secret-key minioadmin123 > /root/mini-minio.log 2>&1 &"
+
+          sleep 5
+
+      - name: Run VPC Intranet Warp Benchmark
+        working-directory: .github
+        run: |
+          set -euo pipefail
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i id_rsa_spot"
+
+          ssh $SSH_OPTS root@$NODE0_PUB "warp put \
+            --host=${NODE0_PRIV}:9000,${NODE1_PRIV}:9000 \
+            --host-select=roundrobin \
+            --access-key=minioadmin \
+            --secret-key=minioadmin123 \
+            --region=us-east-1 \
+            --duration=25s \
+            --concurrent=16 \
+            --bucket=aliyun-warp-put \
+            --obj.size=4MiB \
+            --analyze.v" | tee aliyun-warp-put.log
+
+          ssh $SSH_OPTS root@$NODE0_PUB "warp get \
+            --host=${NODE0_PRIV}:9000,${NODE1_PRIV}:9000 \
+            --host-select=roundrobin \
+            --access-key=minioadmin \
+            --secret-key=minioadmin123 \
+            --region=us-east-1 \
+            --duration=25s \
+            --concurrent=16 \
+            --bucket=aliyun-warp-get \
+            --objects=200 \
+            --obj.size=4MiB \
+            --analyze.v" | tee aliyun-warp-get.log
+
+          echo "## 🚀 AliCloud 2-Node Distributed Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "Benchmark performed across two ECS instances via VPC intranet" >> "$GITHUB_STEP_SUMMARY"
+
+          for log in aliyun-warp-put.log aliyun-warp-get.log; do
+            echo "### $log" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "$log" | tail -n 80 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Destroy Infrastructure
+        working-directory: .github
+        if: always()
+        run: |
+          echo "Destroying AliCloud infrastructure..."
+          terraform destroy -auto-approve
