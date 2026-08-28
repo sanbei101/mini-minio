@@ -314,14 +314,13 @@ jobs:
           wait_node "$NODE1_PUB"
 
       - name: Deploy mini-minio Cluster to ECS
-        working-directory: .github
         run: |
           set -euo pipefail
-          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i id_rsa_spot"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i .github/id_rsa_spot"
 
           for IP in "$NODE0_PUB" "$NODE1_PUB"; do
             scp $SSH_OPTS mini-minio warp.deb root@$IP:/root/
-            ssh $SSH_OPTS root@$IP "dpkg -i /root/warp.deb && mkdir -p /data/d1 /data/d2"
+            ssh $SSH_OPTS root@$IP "dpkg -i /root/warp.deb; chmod +x /root/mini-minio; mkdir -p /data/d1 /data/d2"
           done
 
           ENDPOINTS="--endpoint http://${NODE0_PRIV}:9000/data/d1 --endpoint http://${NODE0_PRIV}:9000/data/d2 --endpoint http://${NODE1_PRIV}:9000/data/d1 --endpoint http://${NODE1_PRIV}:9000/data/d2"
