@@ -329,6 +329,8 @@ jobs:
           mount_disk() {
             local ip=$1 device=$2 mountpoint=$3
             ssh $SSH_OPTS root@$ip "set -e; device='$device'; mountpoint='$mountpoint'; \
+              if [ ! -b \$device ]; then device=\${device/xv/v}; fi; \
+              if [ ! -b \$device ]; then lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS; exit 1; fi; \
               if ! blkid -s TYPE -o value \$device >/dev/null; then mkfs.ext4 -F \$device; fi; \
               mkdir -p \$mountpoint; mountpoint -q \$mountpoint || mount \$device \$mountpoint"
           }
