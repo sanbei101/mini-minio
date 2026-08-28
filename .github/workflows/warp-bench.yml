@@ -21,11 +21,13 @@ jobs:
           go-version: 'stable'
           cache: true
 
-      - name: Install mc and zip
+      - name: Install mc, Warp, and zip
         run: |
           wget https://dl.min.io/client/mc/release/linux-amd64/mc -O mc
           chmod +x mc
           sudo mv mc /usr/local/bin/
+          wget https://dl.min.io/aistor/warp/release/linux-amd64/warp.deb -O warp.deb
+          sudo dpkg -i warp.deb
           sudo apt update
           sudo apt install --yes zip
 
@@ -112,6 +114,53 @@ jobs:
           mc cp multipart.zip node-b/test-bucket/multipart.zip
           mc cp node-a/test-bucket/multipart.zip multipart-downloaded.zip
           cmp multipart.zip multipart-downloaded.zip
+
+      - name: Benchmark distributed cluster with Warp
+        run: |
+          set -euo pipefail
+          common=(
+            --host=127.0.0.1:19000,127.0.0.1:19001 \
+            --host-select=roundrobin \
+            --access-key=minioadmin \
+            --secret-key=minioadmin123 \
+            --region=us-east-1 \
+            --duration=20s \
+            --concurrent=8 \
+            --analyze.v
+          )
+
+          warp put "${common[@]}" \
+            --bucket=cluster-warp-put \
+            --obj.size=1MiB 2>&1 | tee cluster-warp-put.log
+
+          warp get "${common[@]}" \
+            --bucket=cluster-warp-get \
+            --objects=100 \
+            --obj.size=1MiB 2>&1 | tee cluster-warp-get.log
+
+          warp mixed "${common[@]}" \
+            --bucket=cluster-warp-mixed \
+            --objects=100 \
+            --obj.size=256KiB \
+            --get-distrib=45 \
+            --stat-distrib=25 \
+            --put-distrib=20 \
+            --delete-distrib=10 2>&1 | tee cluster-warp-mixed.log
+
+          warp multipart "${common[@]}" \
+            --bucket=cluster-warp-multipart \
+            --parts=16 \
+            --part.size=5MiB \
+            --concurrent=4 2>&1 | tee cluster-warp-multipart.log
+
+          echo '## Distributed Cluster Warp Benchmarks' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Two S3 endpoints are exercised in round-robin order. Results use one GitHub runner and loopback networking, so they are regression data, not physical two-machine throughput.' >> "$GITHUB_STEP_SUMMARY"
+          for log in cluster-warp-put.log cluster-warp-get.log cluster-warp-mixed.log cluster-warp-multipart.log; do
+            echo "### $log" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "$log" | tail -n 100 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Stop cluster and print logs
         if: always()
