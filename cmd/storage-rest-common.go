@@ -24,7 +24,7 @@ const (
 
 func storageRESTSignature(secret, timestamp, method, escapedPath, rawQuery, configHash string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = fmt.Fprintf(mac, "%s\n%s\n%s\n%s\n%s", timestamp, method, escapedPath, rawQuery, configHash)
+	fmt.Fprintf(mac, "%s\n%s\n%s\n%s\n%s", timestamp, method, escapedPath, rawQuery, configHash)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 

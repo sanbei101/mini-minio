@@ -71,14 +71,18 @@ func (c *storageRESTClient) call(
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		return resp, nil
 	}
-	defer resp.Body.Close()
-	message, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	message, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	closeErr := resp.Body.Close()
+	responseErr := errors.Join(readErr, closeErr)
 	switch resp.StatusCode {
 	case http.StatusNotFound:
-		return nil, storage.ErrNotFound
+		return nil, errors.Join(storage.ErrNotFound, responseErr)
 	case http.StatusConflict:
-		return nil, storage.ErrBucketExists
+		return nil, errors.Join(storage.ErrBucketExists, responseErr)
 	default:
+		if responseErr != nil {
+			return nil, fmt.Errorf("remote drive %s %s: %s: %w", operation, resp.Status, string(message), responseErr)
+		}
 		return nil, fmt.Errorf("remote drive %s %s: %s", operation, resp.Status, string(message))
 	}
 }
@@ -86,7 +90,7 @@ func (c *storageRESTClient) call(
 func (c *storageRESTClient) MakeBucket(bucket string) error {
 	resp, err := c.call(context.Background(), http.MethodPut, "bucket", url.Values{"bucket": {bucket}}, nil)
 	if resp != nil {
-		resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
@@ -94,7 +98,7 @@ func (c *storageRESTClient) MakeBucket(bucket string) error {
 func (c *storageRESTClient) DeleteBucket(bucket string) error {
 	resp, err := c.call(context.Background(), http.MethodDelete, "bucket", url.Values{"bucket": {bucket}}, nil)
 	if resp != nil {
-		resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
@@ -104,9 +108,12 @@ func (c *storageRESTClient) ListBuckets() ([]os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	var buckets []storageRESTFileInfo
-	if err := decodeStorageREST(resp.Body, &buckets); err != nil {
+	data, err := readStorageRESTBody(resp)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &buckets); err != nil {
 		return nil, err
 	}
 	infos := make([]os.FileInfo, len(buckets))
@@ -121,9 +128,12 @@ func (c *storageRESTClient) StatBucket(bucket string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	var info storageRESTFileInfo
-	if err := decodeStorageREST(resp.Body, &info); err != nil {
+	data, err := readStorageRESTBody(resp)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
 		return nil, err
 	}
 	return info, nil
@@ -140,13 +150,14 @@ func (c *storageRESTClient) CreateShardFile(
 	go func() {
 		resp, err := c.call(ctx, http.MethodPost, "shard", values, reader)
 		if resp != nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			_, drainErr := io.Copy(io.Discard, resp.Body)
+			closeErr := resp.Body.Close()
+			err = errors.Join(err, drainErr, closeErr)
 		}
 		if err != nil {
-			_ = reader.CloseWithError(err)
+			err = errors.Join(err, reader.CloseWithError(err))
 		} else {
-			_ = reader.Close()
+			err = reader.Close()
 		}
 		done <- err
 	}()
@@ -171,7 +182,7 @@ func (c *storageRESTClient) ReadShardFile(
 func (c *storageRESTClient) DeleteObjectData(bucket, object, dataDir string) error {
 	resp, err := c.call(context.Background(), http.MethodDelete, "data", shardValues(bucket, object, dataDir, 0), nil)
 	if resp != nil {
-		resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
@@ -185,7 +196,7 @@ func (c *storageRESTClient) WriteMetaTmp(bucket, object string, data []byte) err
 		bytes.NewReader(data),
 	)
 	if resp != nil {
-		resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
@@ -193,7 +204,7 @@ func (c *storageRESTClient) WriteMetaTmp(bucket, object string, data []byte) err
 func (c *storageRESTClient) RenameMeta(bucket, object string) error {
 	resp, err := c.call(context.Background(), http.MethodPost, "rename-meta", objectValues(bucket, object), nil)
 	if resp != nil {
-		resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
@@ -203,15 +214,14 @@ func (c *storageRESTClient) ReadMeta(bucket, object string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	return readStorageRESTBody(resp)
 }
 
 func (c *storageRESTClient) WriteUploadMeta(bucket, object, uploadID, name string, data []byte) error {
 	values := uploadValues(bucket, object, uploadID, name)
 	resp, err := c.call(context.Background(), http.MethodPut, "upload-meta", values, bytes.NewReader(data))
 	if resp != nil {
-		resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
@@ -227,8 +237,7 @@ func (c *storageRESTClient) ReadUploadMeta(bucket, object, uploadID, name string
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	return readStorageRESTBody(resp)
 }
 
 func (c *storageRESTClient) DeleteUpload(bucket, object, uploadID string) error {
@@ -240,7 +249,7 @@ func (c *storageRESTClient) DeleteUpload(bucket, object, uploadID string) error 
 		nil,
 	)
 	if resp != nil {
-		resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
@@ -248,7 +257,7 @@ func (c *storageRESTClient) DeleteUpload(bucket, object, uploadID string) error 
 func (c *storageRESTClient) DeleteObject(bucket, object string) error {
 	resp, err := c.call(context.Background(), http.MethodDelete, "object", objectValues(bucket, object), nil)
 	if resp != nil {
-		resp.Body.Close()
+		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
@@ -264,9 +273,12 @@ func (c *storageRESTClient) ListObjects(bucket, prefix string) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	var names []string
-	if err := decodeStorageREST(resp.Body, &names); err != nil {
+	data, err := readStorageRESTBody(resp)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &names); err != nil {
 		return nil, err
 	}
 	return names, nil
@@ -286,8 +298,8 @@ func (c *storageRESTClient) readShard(
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
-	return io.ReadFull(resp.Body, p)
+	n, readErr := io.ReadFull(resp.Body, p)
+	return n, errors.Join(readErr, resp.Body.Close())
 }
 
 type storageRESTShardWriter struct {
@@ -303,10 +315,7 @@ func (w *storageRESTShardWriter) Write(p []byte) (int, error) {
 
 func (w *storageRESTShardWriter) Close() error {
 	w.once.Do(func() {
-		w.closeErr = w.writer.Close()
-		if err := <-w.done; w.closeErr == nil {
-			w.closeErr = err
-		}
+		w.closeErr = errors.Join(w.writer.Close(), <-w.done)
 	})
 	return w.closeErr
 }
@@ -364,10 +373,8 @@ func uploadValues(bucket, object, uploadID, name string) url.Values {
 	return values
 }
 
-func decodeStorageREST(r io.Reader, out any) error {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, out)
+func readStorageRESTBody(resp *http.Response) ([]byte, error) {
+	data, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	return data, errors.Join(readErr, closeErr)
 }

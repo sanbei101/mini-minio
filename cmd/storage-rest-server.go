@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/phuslu/log"
+
 	"github.com/sanbei101/mini-minio/internal/storage"
 )
 
@@ -82,9 +84,7 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 				return
 			}
 			_, err = io.Copy(writer, r.Body)
-			if closeErr := writer.Close(); err == nil {
-				err = closeErr
-			}
+			err = errors.Join(err, writer.Close())
 			writeStorageRESTError(w, err)
 			return
 		}
@@ -99,14 +99,18 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 				writeStorageRESTError(w, err)
 				return
 			}
-			defer reader.Close()
 			buf := make([]byte, length)
-			n, err := reader.ReadAt(buf, offset)
-			if err != nil && (!errors.Is(err, io.EOF) || n <= 0) {
-				writeStorageRESTError(w, err)
+			n, readErr := reader.ReadAt(buf, offset)
+			closeErr := reader.Close()
+			if readErr != nil && (!errors.Is(readErr, io.EOF) || n <= 0) {
+				writeStorageRESTError(w, errors.Join(readErr, closeErr))
 				return
 			}
-			_, _ = w.Write(buf[:n])
+			if closeErr != nil {
+				writeStorageRESTError(w, closeErr)
+				return
+			}
+			writeStorageRESTBody(w, buf[:n])
 			return
 		}
 	case "data":
@@ -129,7 +133,7 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 				writeStorageRESTError(w, err)
 				return
 			}
-			_, _ = w.Write(data)
+			writeStorageRESTBody(w, data)
 			return
 		}
 	case "rename-meta":
@@ -157,7 +161,7 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 				writeStorageRESTError(w, err)
 				return
 			}
-			_, _ = w.Write(data)
+			writeStorageRESTBody(w, data)
 			return
 		}
 	case "upload":
@@ -232,5 +236,11 @@ func writeStorageRESTJSON(w http.ResponseWriter, value any) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(data)
+	writeStorageRESTBody(w, data)
+}
+
+func writeStorageRESTBody(w http.ResponseWriter, data []byte) {
+	if _, err := w.Write(data); err != nil {
+		log.Error().Err(err).Msg("failed to write storage response")
+	}
 }

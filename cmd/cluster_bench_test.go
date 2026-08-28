@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/phuslu/log"
+
 	"github.com/sanbei101/mini-minio/cmd"
 )
 
@@ -156,16 +157,16 @@ func setupClusterBenchmark(b *testing.B) (cmd.ObjectLayer, cmd.ObjectLayer, stri
 	}
 	listenerB, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		listenerA.Close()
+		if closeErr := listenerA.Close(); closeErr != nil {
+			b.Error(closeErr)
+		}
 		b.Fatal(err)
 	}
 	b.Cleanup(func() {
-		err = listenerA.Close()
-		if err != nil {
+		if err := listenerA.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Error().Err(err).Msg("failed to close listenerA")
 		}
-		err = listenerB.Close()
-		if err != nil {
+		if err := listenerB.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Error().Err(err).Msg("failed to close listenerB")
 		}
 	})
@@ -208,12 +209,10 @@ func setupClusterBenchmark(b *testing.B) (cmd.ObjectLayer, cmd.ObjectLayer, stri
 		}
 	}()
 	b.Cleanup(func() {
-		err = serverA.Close()
-		if err != nil {
+		if err := serverA.Close(); err != nil {
 			b.Error(err)
 		}
-		err = serverB.Close()
-		if err != nil {
+		if err := serverB.Close(); err != nil {
 			b.Error(err)
 		}
 	})

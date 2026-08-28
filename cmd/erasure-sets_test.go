@@ -63,10 +63,13 @@ func TestErasureSetsRouteAndListAcrossSets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
 	body, err := io.ReadAll(reader)
+	closeErr := reader.Close()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	if string(body) != objects["object-000"] {
 		t.Fatalf("body mismatch: %q", body)
@@ -151,7 +154,9 @@ func TestPutObjectOverwriteCleansOldData(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, err := io.ReadAll(reader)
-	reader.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +225,9 @@ func TestConcurrentPutObjectSameKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, err := io.ReadAll(reader)
-	reader.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -311,7 +311,7 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "NoSuchKey", err.Error())
 			return
 		}
-		rs, partLength, err = objectPartRange(objInfo, partNumber)
+		rs, partLength, err = objectPartRange(&objInfo, partNumber)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "InvalidPart", err.Error())
 			return
@@ -332,7 +332,11 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NoSuchKey", err.Error())
 		return
 	}
-	defer objReader.Close()
+	defer func() {
+		if err := objReader.Close(); err != nil {
+			log.Error().Err(err).Str("bucket", bucket).Str("object", object).Msg("failed to close object reader")
+		}
+	}()
 
 	info := objReader.ObjInfo
 	if partRequest {
@@ -375,7 +379,7 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func objectPartRange(info ObjectInfo, partNumber int) (*HTTPRangeSpec, int64, error) {
+func objectPartRange(info *ObjectInfo, partNumber int) (*HTTPRangeSpec, int64, error) {
 	var offset int64
 	for _, part := range info.Parts {
 		if part.Number == partNumber {
@@ -425,7 +429,7 @@ func (a *apiHandlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
-		response.Deleted = append(response.Deleted, deletedObject{Key: object.Key})
+		response.Deleted = append(response.Deleted, deletedObject(object))
 	}
 	writeXML(w, http.StatusOK, response)
 }

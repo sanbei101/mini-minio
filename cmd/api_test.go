@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -148,10 +149,8 @@ func (s *apiTestServer) do(method, target string, body io.Reader, headers http.H
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
+	respBody, readErr := io.ReadAll(resp.Body)
+	if err := errors.Join(readErr, resp.Body.Close()); err != nil {
 		s.t.Fatal(err)
 	}
 	return apiResponse{status: resp.StatusCode, header: resp.Header.Clone(), body: respBody}
@@ -175,7 +174,11 @@ func TestNoAuthRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("want 403, got %d", resp.StatusCode)
 	}

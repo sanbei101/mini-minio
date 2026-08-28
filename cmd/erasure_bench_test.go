@@ -33,13 +33,13 @@ func createErasureLayer(tb testing.TB, dataBlocks, parityBlocks int) cmd.ObjectL
 func BenchmarkPutObject_SmallFile(b *testing.B) {
 	obj := createErasureLayer(b, 4, 2)
 	ctx := context.Background()
-	obj.MakeBucket(ctx, "bench-bucket")
+	makeBenchmarkBucket(b, obj, ctx)
 	payload := make([]byte, 1024)
 
 	b.ReportAllocs()
 	for b.Loop() {
 		data := bytes.NewReader(payload)
-		reader, _ := cmd.NewPutObjReader(data, 1024)
+		reader := newBenchmarkReader(b, data, 1024)
 		// Reuse same object name to avoid unbounded disk growth
 		_, err := obj.PutObject(ctx, "bench-bucket", "small", reader)
 		if err != nil {
@@ -52,13 +52,13 @@ func BenchmarkPutObject_SmallFile(b *testing.B) {
 func BenchmarkPutObject_MediumFile(b *testing.B) {
 	obj := createErasureLayer(b, 4, 2)
 	ctx := context.Background()
-	obj.MakeBucket(ctx, "bench-bucket")
+	makeBenchmarkBucket(b, obj, ctx)
 	payload := make([]byte, 100*1024)
 
 	b.ReportAllocs()
 	for b.Loop() {
 		data := bytes.NewReader(payload)
-		reader, _ := cmd.NewPutObjReader(data, 100*1024)
+		reader := newBenchmarkReader(b, data, 100*1024)
 		_, err := obj.PutObject(ctx, "bench-bucket", "medium", reader)
 		if err != nil {
 			b.Fatal(err)
@@ -70,13 +70,13 @@ func BenchmarkPutObject_MediumFile(b *testing.B) {
 func BenchmarkPutObject_LargeFile(b *testing.B) {
 	obj := createErasureLayer(b, 4, 2)
 	ctx := context.Background()
-	obj.MakeBucket(ctx, "bench-bucket")
+	makeBenchmarkBucket(b, obj, ctx)
 	payload := make([]byte, 1024*1024)
 
 	b.ReportAllocs()
 	for b.Loop() {
 		data := bytes.NewReader(payload)
-		reader, _ := cmd.NewPutObjReader(data, 1024*1024)
+		reader := newBenchmarkReader(b, data, 1024*1024)
 		_, err := obj.PutObject(ctx, "bench-bucket", "large", reader)
 		if err != nil {
 			b.Fatal(err)
@@ -88,11 +88,11 @@ func BenchmarkPutObject_LargeFile(b *testing.B) {
 func BenchmarkGetObject(b *testing.B) {
 	obj := createErasureLayer(b, 4, 2)
 	ctx := context.Background()
-	obj.MakeBucket(ctx, "bench-bucket")
+	makeBenchmarkBucket(b, obj, ctx)
 
 	// Pre-populate one object only
 	data := bytes.NewReader(make([]byte, 100*1024))
-	reader, _ := cmd.NewPutObjReader(data, 100*1024)
+	reader := newBenchmarkReader(b, data, 100*1024)
 	_, err := obj.PutObject(ctx, "bench-bucket", "test-object", reader)
 	if err != nil {
 		b.Fatal(err)
@@ -104,8 +104,12 @@ func BenchmarkGetObject(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		io.Copy(io.Discard, r.Reader)
-		r.Close()
+		if _, err := io.Copy(io.Discard, r.Reader); err != nil {
+			b.Fatal(err)
+		}
+		if err := r.Close(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -120,7 +124,7 @@ func BenchmarkPutObject_Parallel(b *testing.B) {
 func benchmarkPutObjectParallel(b *testing.B, dataBlocks, parityBlocks int) {
 	obj := createErasureLayer(b, dataBlocks, parityBlocks)
 	ctx := context.Background()
-	obj.MakeBucket(ctx, "bench-bucket")
+	makeBenchmarkBucket(b, obj, ctx)
 	payload := make([]byte, 20*1024)
 	var objectID atomic.Uint64
 
@@ -129,7 +133,7 @@ func benchmarkPutObjectParallel(b *testing.B, dataBlocks, parityBlocks int) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			data := bytes.NewReader(payload)
-			reader, _ := cmd.NewPutObjReader(data, 20*1024)
+			reader := newBenchmarkReader(b, data, 20*1024)
 			name := "parallel-" + strconv.FormatUint(objectID.Add(1), 10)
 			_, err := obj.PutObject(ctx, "bench-bucket", name, reader)
 			if err != nil {
@@ -150,12 +154,12 @@ func BenchmarkGetObject_Parallel(b *testing.B) {
 func benchmarkGetObjectParallel(b *testing.B, dataBlocks, parityBlocks int) {
 	obj := createErasureLayer(b, dataBlocks, parityBlocks)
 	ctx := context.Background()
-	obj.MakeBucket(ctx, "bench-bucket")
+	makeBenchmarkBucket(b, obj, ctx)
 
 	// Pre-populate only 10 objects (20KB each = ~120KB total across 6 disks)
 	for i := range 10 {
 		data := bytes.NewReader(make([]byte, 20*1024))
-		reader, _ := cmd.NewPutObjReader(data, 20*1024)
+		reader := newBenchmarkReader(b, data, 20*1024)
 		_, err := obj.PutObject(ctx, "bench-bucket", "test-"+itoa(i), reader)
 		if err != nil {
 			b.Fatal(err)
@@ -172,8 +176,12 @@ func benchmarkGetObjectParallel(b *testing.B, dataBlocks, parityBlocks int) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			io.Copy(io.Discard, r.Reader)
-			r.Close()
+			if _, err := io.Copy(io.Discard, r.Reader); err != nil {
+				b.Fatal(err)
+			}
+			if err := r.Close(); err != nil {
+				b.Fatal(err)
+			}
 			counter++
 		}
 	})
@@ -253,12 +261,12 @@ func benchmarkErasureDecode(b *testing.B, dataBlocks, parityBlocks int) {
 func BenchmarkListObjects(b *testing.B) {
 	obj := createErasureLayer(b, 4, 2)
 	ctx := context.Background()
-	obj.MakeBucket(ctx, "bench-bucket")
+	makeBenchmarkBucket(b, obj, ctx)
 
 	// Pre-populate 100 small objects only
 	for i := range 100 {
 		data := bytes.NewReader(make([]byte, 512))
-		reader, _ := cmd.NewPutObjReader(data, 512)
+		reader := newBenchmarkReader(b, data, 512)
 		_, err := obj.PutObject(ctx, "bench-bucket", "obj-"+itoa(i), reader)
 		if err != nil {
 			b.Fatal(err)
@@ -281,36 +289,58 @@ func BenchmarkDiskWriteComparison(b *testing.B) {
 
 	b.Run("2+1 disks (minimum erasure)", func(b *testing.B) {
 		obj := createErasureLayer(b, 2, 1)
-		obj.MakeBucket(ctx, "bench-bucket")
+		makeBenchmarkBucket(b, obj, ctx)
 		b.ResetTimer()
 		for b.Loop() {
 			data := bytes.NewReader(make([]byte, 50*1024))
-			reader, _ := cmd.NewPutObjReader(data, 50*1024)
-			obj.PutObject(ctx, "bench-bucket", "single", reader)
+			reader := newBenchmarkReader(b, data, 50*1024)
+			if _, err := obj.PutObject(ctx, "bench-bucket", "single", reader); err != nil {
+				b.Fatal(err)
+			}
 		}
 	})
 
 	b.Run("4+2 disks", func(b *testing.B) {
 		obj := createErasureLayer(b, 4, 2)
-		obj.MakeBucket(ctx, "bench-bucket")
+		makeBenchmarkBucket(b, obj, ctx)
 		b.ResetTimer()
 		for b.Loop() {
 			data := bytes.NewReader(make([]byte, 50*1024))
-			reader, _ := cmd.NewPutObjReader(data, 50*1024)
-			obj.PutObject(ctx, "bench-bucket", "multi42", reader)
+			reader := newBenchmarkReader(b, data, 50*1024)
+			if _, err := obj.PutObject(ctx, "bench-bucket", "multi42", reader); err != nil {
+				b.Fatal(err)
+			}
 		}
 	})
 
 	b.Run("6+2 disks", func(b *testing.B) {
 		obj := createErasureLayer(b, 6, 2)
-		obj.MakeBucket(ctx, "bench-bucket")
+		makeBenchmarkBucket(b, obj, ctx)
 		b.ResetTimer()
 		for b.Loop() {
 			data := bytes.NewReader(make([]byte, 50*1024))
-			reader, _ := cmd.NewPutObjReader(data, 50*1024)
-			obj.PutObject(ctx, "bench-bucket", "multi62", reader)
+			reader := newBenchmarkReader(b, data, 50*1024)
+			if _, err := obj.PutObject(ctx, "bench-bucket", "multi62", reader); err != nil {
+				b.Fatal(err)
+			}
 		}
 	})
+}
+
+func makeBenchmarkBucket(tb testing.TB, obj cmd.ObjectLayer, ctx context.Context) {
+	tb.Helper()
+	if err := obj.MakeBucket(ctx, "bench-bucket"); err != nil {
+		tb.Fatal(err)
+	}
+}
+
+func newBenchmarkReader(tb testing.TB, data io.Reader, size int64) *cmd.PutObjReader {
+	tb.Helper()
+	reader, err := cmd.NewPutObjReader(data, size)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return reader
 }
 
 // Helper function for int to string conversion

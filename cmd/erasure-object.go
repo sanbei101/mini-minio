@@ -195,7 +195,7 @@ func (e *erasureObjects) ListBuckets(_ context.Context) ([]BucketInfo, error) {
 	return e.listBucketInfos()
 }
 
-func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error {
+func (e *erasureObjects) DeleteBucket(_ context.Context, bucket string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var wg sync.WaitGroup
@@ -252,7 +252,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		BlockSize:    erasure.BlockSize,
 		Parts:        []ObjectPartInfo{{Number: 1, Size: e.erasureEngine.ShardFileSize(n), ActualSize: n}},
 	}
-	if err := e.commitMeta(ctx, bucket, object, oldMeta, meta); err != nil {
+	if err := e.commitMeta(ctx, bucket, object, oldMeta, &meta); err != nil {
 		return ObjectInfo{}, err
 	}
 
@@ -318,7 +318,7 @@ func (e *erasureObjects) writePart(
 	return n, nil
 }
 
-func (e *erasureObjects) commitMeta(ctx context.Context, bucket, object string, oldMeta *xlMeta, meta xlMeta) error {
+func (e *erasureObjects) commitMeta(_ context.Context, bucket, object string, oldMeta, meta *xlMeta) error {
 	writeQuorum := e.dataBlocks
 	if e.dataBlocks == e.parityBlocks {
 		writeQuorum++
@@ -332,7 +332,7 @@ func (e *erasureObjects) commitMeta(ctx context.Context, bucket, object string, 
 		wg.Add(1)
 		go func(idx int, disk storage.API) {
 			defer wg.Done()
-			m := meta
+			m := *meta
 			m.DiskIndex = idx
 			data, err := json.Marshal(&m)
 			if err != nil {
@@ -420,7 +420,7 @@ func (e *erasureObjects) cleanupObjectData(bucket, object, dataDir string, selec
 	wg.Wait()
 }
 
-func (e *erasureObjects) GetObjectInfo(ctx context.Context, bucket, object string) (ObjectInfo, error) {
+func (e *erasureObjects) GetObjectInfo(_ context.Context, bucket, object string) (ObjectInfo, error) {
 	meta, err := e.readMeta(bucket, object)
 	if err != nil {
 		return ObjectInfo{}, err
@@ -482,8 +482,8 @@ func (e *erasureObjects) decodeObject(
 ) error {
 	if len(meta.Parts) <= 1 {
 		readers, closers := e.openShardReaders(ctx, meta.Bucket, meta.Name, meta.DataDir, 1)
-		defer closeShardReaders(closers)
-		return enc.Decode(ctx, dst, readers, offset, length, meta.Size)
+		decodeErr := enc.Decode(ctx, dst, readers, offset, length, meta.Size)
+		return errors.Join(decodeErr, closeShardReaders(closers))
 	}
 
 	var objectOffset int64
@@ -500,8 +500,8 @@ func (e *erasureObjects) decodeObject(
 
 		readers, closers := e.openShardReaders(ctx, meta.Bucket, meta.Name, meta.DataDir, part.Number)
 		err := enc.Decode(ctx, dst, readers, start-partStart, end-start, part.ActualSize)
-		closeShardReaders(closers)
-		if err != nil {
+		closeErr := closeShardReaders(closers)
+		if err = errors.Join(err, closeErr); err != nil {
 			return err
 		}
 	}
@@ -525,12 +525,14 @@ func (e *erasureObjects) openShardReaders(
 	return readers, closers
 }
 
-func closeShardReaders(closers []io.Closer) {
+func closeShardReaders(closers []io.Closer) error {
+	var closeErr error
 	for _, closer := range closers {
 		if closer != nil {
-			_ = closer.Close()
+			closeErr = errors.Join(closeErr, closer.Close())
 		}
 	}
+	return closeErr
 }
 
 func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string) (ObjectInfo, error) {
@@ -765,7 +767,7 @@ func (e *erasureObjects) CompleteMultipartUpload(
 		BlockSize:    erasure.BlockSize,
 		Parts:        parts,
 	}
-	if err := e.commitMeta(ctx, bucket, object, oldMeta, meta); err != nil {
+	if err := e.commitMeta(ctx, bucket, object, oldMeta, &meta); err != nil {
 		return ObjectInfo{}, err
 	}
 	if err := e.deleteUpload(bucket, object, uploadID); err != nil {
@@ -782,7 +784,7 @@ func (e *erasureObjects) CompleteMultipartUpload(
 	}, nil
 }
 
-func (e *erasureObjects) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {
+func (e *erasureObjects) AbortMultipartUpload(_ context.Context, bucket, object, uploadID string) error {
 	state, err := e.readMultipartState(bucket, object, uploadID)
 	if err != nil {
 		return err
@@ -879,7 +881,7 @@ func multipartETag(parts []ObjectPartInfo) string {
 	for _, part := range parts {
 		decoded, err := hex.DecodeString(part.ETag)
 		if err == nil {
-			_, _ = hash.Write(decoded)
+			hash.Write(decoded)
 		}
 	}
 	return fmt.Sprintf("%x-%d", hash.Sum(nil), len(parts))

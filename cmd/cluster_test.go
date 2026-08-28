@@ -66,7 +66,9 @@ func TestClusterWritesAndReadsRemoteShards(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := io.ReadAll(readerAtB)
-	readerAtB.Close()
+	if err := readerAtB.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +148,9 @@ func TestClusterMultipartPartsUseBothNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := io.ReadAll(reader)
-	reader.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +204,6 @@ func TestClusterStorageRequestRejectsWrongSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("want 403, got %d", response.StatusCode)
 	}
@@ -208,6 +211,9 @@ func TestClusterStorageRequestRejectsWrongSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(drivePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
