@@ -285,6 +285,12 @@ func TestMultipartUploadAPI(t *testing.T) {
 	)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 
+	resp = api.signed(http.MethodGet, "/multipart/large.txt?partNumber=1", nil)
+	requireStatus(t, resp.status, http.StatusOK, resp.body)
+	if string(resp.body) != "hello " {
+		t.Fatalf("multipart part body mismatch: %q", resp.body)
+	}
+
 	resp = api.signed(http.MethodGet, "/multipart/large.txt", nil)
 	requireStatus(t, resp.status, http.StatusOK, resp.body)
 	if string(resp.body) != "hello world" {

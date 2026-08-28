@@ -150,8 +150,7 @@ jobs:
           warp multipart "${common[@]}" \
             --bucket=cluster-warp-multipart \
             --parts=16 \
-            --part.size=5MiB \
-            --concurrent=4 2>&1 | tee cluster-warp-multipart.log
+            --part.size=5MiB 2>&1 | tee cluster-warp-multipart.log
 
           echo '## Distributed Cluster Warp Benchmarks' >> "$GITHUB_STEP_SUMMARY"
           echo 'Two S3 endpoints are exercised in round-robin order. Results use one GitHub runner and loopback networking, so they are regression data, not physical two-machine throughput.' >> "$GITHUB_STEP_SUMMARY"

@@ -27,6 +27,8 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 	mux.HandleFunc("GET /{$}", api.ListBuckets)
 	mux.HandleFunc("PUT /{bucket}/{$}", api.CreateBucket)
 	mux.HandleFunc("DELETE /{bucket}/{$}", api.DeleteBucket)
+	mux.HandleFunc("POST /{bucket}/{$}", api.dispatchBucketPost)
+	mux.HandleFunc("POST /{bucket}", api.dispatchBucketPost)
 	mux.HandleFunc("HEAD /{bucket}/{$}", api.HeadBucket)
 	mux.HandleFunc("GET /{bucket}/{$}", api.ListObjects)
 
@@ -40,6 +42,14 @@ func NewRouter(obj ObjectLayer, creds Credentials) http.Handler {
 		return mux
 	}
 	return requestLoggingMiddleware(authMiddleware(creds, mux))
+}
+
+func (a *apiHandlers) dispatchBucketPost(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("delete") {
+		a.DeleteObjects(w, r)
+		return
+	}
+	writeError(w, http.StatusBadRequest, "InvalidRequest", "unsupported POST operation")
 }
 
 func (a *apiHandlers) dispatchPut(w http.ResponseWriter, r *http.Request) {
@@ -284,6 +294,30 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	bucket, object := r.PathValue("bucket"), r.PathValue("object")
 
 	var rs *HTTPRangeSpec
+	var partLength int64
+	partRequest := false
+	if partText := r.URL.Query().Get("partNumber"); partText != "" {
+		partNumber, err := strconv.Atoi(partText)
+		if err != nil || partNumber < 1 {
+			writeError(w, http.StatusBadRequest, "InvalidPart", "invalid partNumber")
+			return
+		}
+		if r.Header.Get("Range") != "" {
+			writeError(w, http.StatusBadRequest, "InvalidRequest", "partNumber cannot be combined with Range")
+			return
+		}
+		objInfo, err := a.obj.GetObjectInfo(r.Context(), bucket, object)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "NoSuchKey", err.Error())
+			return
+		}
+		rs, partLength, err = objectPartRange(objInfo, partNumber)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "InvalidPart", err.Error())
+			return
+		}
+		partRequest = true
+	}
 	if rangeHdr := r.Header.Get("Range"); rangeHdr != "" {
 		var parseErr error
 		rs, parseErr = parseRangeSpec(rangeHdr)
@@ -301,11 +335,14 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 	defer objReader.Close()
 
 	info := objReader.ObjInfo
+	if partRequest {
+		info.Size = partLength
+	}
 	w.Header().Set("Content-Type", info.ContentType)
 	w.Header().Set("ETag", `"`+info.ETag+`"`)
 	w.Header().Set("Last-Modified", info.ModTime.UTC().Format(http.TimeFormat))
 
-	if rs != nil {
+	if rs != nil && !partRequest {
 		offset, length, err := rs.GetOffsetLength(info.Size)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "InvalidRange", err.Error())
@@ -336,6 +373,61 @@ func (a *apiHandlers) GetObject(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+}
+
+func objectPartRange(info ObjectInfo, partNumber int) (*HTTPRangeSpec, int64, error) {
+	var offset int64
+	for _, part := range info.Parts {
+		if part.Number == partNumber {
+			if part.ActualSize <= 0 {
+				return nil, 0, errors.New("multipart part is empty")
+			}
+			return &HTTPRangeSpec{Start: offset, End: offset + part.ActualSize - 1}, part.ActualSize, nil
+		}
+		offset += part.ActualSize
+	}
+	return nil, 0, fmt.Errorf("part %d not found", partNumber)
+}
+
+func (a *apiHandlers) DeleteObjects(w http.ResponseWriter, r *http.Request) {
+	type deleteObject struct {
+		Key string `xml:"Key"`
+	}
+	type deleteRequest struct {
+		Objects []deleteObject `xml:"Object"`
+	}
+	type deletedObject struct {
+		Key string `xml:"Key"`
+	}
+	type deleteError struct {
+		Key     string `xml:"Key"`
+		Code    string `xml:"Code"`
+		Message string `xml:"Message"`
+	}
+	type deleteResponse struct {
+		XMLName xml.Name       `xml:"DeleteResult"`
+		Deleted []deletedObject `xml:"Deleted,omitempty"`
+		Errors  []deleteError   `xml:"Error,omitempty"`
+	}
+
+	var request deleteRequest
+	if err := xml.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "MalformedXML", err.Error())
+		return
+	}
+	response := deleteResponse{}
+	for _, object := range request.Objects {
+		if _, err := a.obj.DeleteObject(r.Context(), r.PathValue("bucket"), object.Key); err != nil {
+			response.Errors = append(response.Errors, deleteError{
+				Key:     object.Key,
+				Code:    "InternalError",
+				Message: err.Error(),
+			})
+			continue
+		}
+		response.Deleted = append(response.Deleted, deletedObject{Key: object.Key})
+	}
+	writeXML(w, http.StatusOK, response)
 }
 
 func (a *apiHandlers) HeadObject(w http.ResponseWriter, r *http.Request) {

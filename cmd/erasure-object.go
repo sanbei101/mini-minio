@@ -432,6 +432,7 @@ func (e *erasureObjects) GetObjectInfo(ctx context.Context, bucket, object strin
 		ModTime:     meta.ModTime,
 		ETag:        meta.ETag,
 		ContentType: meta.ContentType,
+		Parts:       meta.Parts,
 	}, nil
 }
 
