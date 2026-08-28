@@ -42,6 +42,7 @@
 - **多集合架构** - 对象通过 CRC32 哈希分配到不同 Erasure Set,实现负载均衡
 - **并行磁盘 I/O** - 读写删查全部并行执行,通过 Quorum 机制保证一致性
 - **静态分布式纠删码** - 本地和远程 drive 统一参与 shard 写入与读取
+- **两节点集群** - 任意节点可处理 S3 请求,通过内部认证 HTTP RPC 访问远程 drive
 - **AWS Signature V4** - 支持 Header 认证和 Presigned URL,兼容标准 AWS SDK / CLI
 - **流式编解码** - 10 MiB 分块流式编码,pipe-based 并行解码,内存占用可控
 - **4K 对齐缓冲池** - channel 实现的有界缓冲池,配合纠删码库的对齐分配
@@ -90,6 +91,46 @@ go build -o mini-minio .
 节点 `10.0.0.12` 将 `--node-url` 改为 `http://10.0.0.12:9000`,其余参数
 保持不变。S3 客户端可以直接访问任意节点;收到请求的节点负责编码,并将
 shard 写入全部节点的 drive。
+
+### 集群工作方式
+
+集群使用静态 endpoint 列表。每个节点必须使用完全相同且顺序一致的
+`--endpoint` 参数;节点根据 `--node-url` 判断 drive 是本地磁盘还是远程 drive。
+
+```text
+S3 Client
+    |
+    +-- 任意节点的 :9000
+            |
+            +-- Reed-Solomon 编码
+            +-- 本地 drive: 直接写入文件系统
+            +-- 远程 drive: 内部 storage REST RPC 写入对端节点
+```
+
+- `2+2` 表示 2 个数据 shard 和 2 个 parity shard,共 4 个 drive。
+- 每个对象写入时同时生成 4 个 shard;读取时任意 2 个可用 shard 即可恢复数据。
+- 两台机器各持有 2 个 shard 时,任意一台机器失效后仍保留 2 个 shard,对象可恢复。
+- 内部 storage RPC 使用集群共享密钥进行 HMAC 校验,不作为公开 S3 API 暴露。
+- multipart 的每个 part 直接纠删码写入 drive;完成上传时仅提交对象元数据。
+- 请求的 `context.Context` 会传递至远程 HTTP RPC、编码和磁盘操作;客户端取消会停止后续 I/O。
+
+`--endpoint` 应指向独立故障域。生产或性能测试建议每个 endpoint 使用独立块设备;
+
+### 集群测试与基准
+
+```bash
+# 两节点本地集群集成测试
+go test ./cmd -run '^TestCluster'
+
+# 两节点本地集群 Go benchmark
+go test ./cmd -run '^$' -bench=BenchmarkCluster -benchmem
+```
+
+`.github/workflows/warp-bench.yml` 还会执行双节点 S3 集成测试和 Warp 压测。可选的
+阿里云阶段通过 Terraform 创建两台 ECS,在同一 VPC 内运行真实集群。
+
+当前真实环境使用低规格 ECS 和有限内网带宽。已观测到 4 MiB、16 并发下约
+`94 MiB/s` PUT、`247 MiB/s` GET;结果受实例内网链路限制,仅用于回归比较,不代表项目的通用性能上限。
 
 ### 使用 MinIO 客户端测试
 
@@ -281,6 +322,7 @@ go test -run '^$' -bench=BenchmarkCluster -benchmem ./cmd/
 - [x] 原子元数据写入(write-then-rename)
 - [x] 完整的集成测试和基准测试
 - [x] CI 自动化测试 + warp 压力测试
+- [x] 静态两节点分布式纠删码 + 远程 storage RPC
 
 ### 🔜 计划中
 
@@ -308,8 +350,8 @@ go test -run '^$' -bench=BenchmarkCluster -benchmem ./cmd/
 | 事件通知 | ❌ | ✅ |
 | 生命周期管理 | ❌ | ✅ |
 | 监控指标 | ❌ | ✅ |
-| 依赖数量 | **4** | 50+ |
-| 代码行数 | **~2000** | ~200K |
+| 依赖数量 | **2** | 50+ |
+| 代码行数 | **~5000** | ~250K |
 
 > mini-minio 的目标不是替代 MinIO,而是**帮助你理解 MinIO 的核心设计**。
 
