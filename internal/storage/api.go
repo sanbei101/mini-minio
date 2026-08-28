@@ -21,22 +21,22 @@ type ShardReader interface {
 // API contains the storage operations used by the mini object layer.
 // Implementations can be local disks or internal remote-drive clients.
 type API interface {
-	MakeBucket(string) error
-	DeleteBucket(string) error
-	ListBuckets() ([]os.FileInfo, error)
-	StatBucket(string) (os.FileInfo, error)
+	MakeBucket(context.Context, string) error
+	DeleteBucket(context.Context, string) error
+	ListBuckets(context.Context) ([]os.FileInfo, error)
+	StatBucket(context.Context, string) (os.FileInfo, error)
 
 	CreateShardFile(context.Context, string, string, string, int) (ShardWriter, error)
 	ReadShardFile(context.Context, string, string, string, int) (ShardReader, error)
-	DeleteObjectData(string, string, string) error
+	DeleteObjectData(context.Context, string, string, string) error
 
-	WriteMetaTmp(string, string, []byte) error
-	RenameMeta(string, string) error
-	ReadMeta(string, string) ([]byte, error)
-	WriteUploadMeta(string, string, string, string, []byte) error
-	ReadUploadMeta(string, string, string, string) ([]byte, error)
-	DeleteUpload(string, string, string) error
+	WriteMetaTmp(context.Context, string, string, []byte) error
+	RenameMeta(context.Context, string, string) error
+	ReadMeta(context.Context, string, string) ([]byte, error)
+	WriteUploadMeta(context.Context, string, string, string, string, []byte) error
+	ReadUploadMeta(context.Context, string, string, string, string) ([]byte, error)
+	DeleteUpload(context.Context, string, string, string) error
 
-	DeleteObject(string, string) error
-	ListObjects(string, string) ([]string, error)
+	DeleteObject(context.Context, string, string) error
+	ListObjects(context.Context, string, string) ([]string, error)
 }

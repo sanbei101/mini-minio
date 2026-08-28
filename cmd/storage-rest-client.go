@@ -87,24 +87,24 @@ func (c *storageRESTClient) call(
 	}
 }
 
-func (c *storageRESTClient) MakeBucket(bucket string) error {
-	resp, err := c.call(context.Background(), http.MethodPut, "bucket", url.Values{"bucket": {bucket}}, nil)
+func (c *storageRESTClient) MakeBucket(ctx context.Context, bucket string) error {
+	resp, err := c.call(ctx, http.MethodPut, "bucket", url.Values{"bucket": {bucket}}, nil)
 	if resp != nil {
 		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
 
-func (c *storageRESTClient) DeleteBucket(bucket string) error {
-	resp, err := c.call(context.Background(), http.MethodDelete, "bucket", url.Values{"bucket": {bucket}}, nil)
+func (c *storageRESTClient) DeleteBucket(ctx context.Context, bucket string) error {
+	resp, err := c.call(ctx, http.MethodDelete, "bucket", url.Values{"bucket": {bucket}}, nil)
 	if resp != nil {
 		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
 
-func (c *storageRESTClient) ListBuckets() ([]os.FileInfo, error) {
-	resp, err := c.call(context.Background(), http.MethodGet, "buckets", nil, nil)
+func (c *storageRESTClient) ListBuckets(ctx context.Context) ([]os.FileInfo, error) {
+	resp, err := c.call(ctx, http.MethodGet, "buckets", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -123,8 +123,8 @@ func (c *storageRESTClient) ListBuckets() ([]os.FileInfo, error) {
 	return infos, nil
 }
 
-func (c *storageRESTClient) StatBucket(bucket string) (os.FileInfo, error) {
-	resp, err := c.call(context.Background(), http.MethodGet, "bucket", url.Values{"bucket": {bucket}}, nil)
+func (c *storageRESTClient) StatBucket(ctx context.Context, bucket string) (os.FileInfo, error) {
+	resp, err := c.call(ctx, http.MethodGet, "bucket", url.Values{"bucket": {bucket}}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -179,17 +179,17 @@ func (c *storageRESTClient) ReadShardFile(
 	}, nil
 }
 
-func (c *storageRESTClient) DeleteObjectData(bucket, object, dataDir string) error {
-	resp, err := c.call(context.Background(), http.MethodDelete, "data", shardValues(bucket, object, dataDir, 0), nil)
+func (c *storageRESTClient) DeleteObjectData(ctx context.Context, bucket, object, dataDir string) error {
+	resp, err := c.call(ctx, http.MethodDelete, "data", shardValues(bucket, object, dataDir, 0), nil)
 	if resp != nil {
 		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
 
-func (c *storageRESTClient) WriteMetaTmp(bucket, object string, data []byte) error {
+func (c *storageRESTClient) WriteMetaTmp(ctx context.Context, bucket, object string, data []byte) error {
 	resp, err := c.call(
-		context.Background(),
+		ctx,
 		http.MethodPut,
 		"meta",
 		objectValues(bucket, object),
@@ -201,34 +201,41 @@ func (c *storageRESTClient) WriteMetaTmp(bucket, object string, data []byte) err
 	return err
 }
 
-func (c *storageRESTClient) RenameMeta(bucket, object string) error {
-	resp, err := c.call(context.Background(), http.MethodPost, "rename-meta", objectValues(bucket, object), nil)
+func (c *storageRESTClient) RenameMeta(ctx context.Context, bucket, object string) error {
+	resp, err := c.call(ctx, http.MethodPost, "rename-meta", objectValues(bucket, object), nil)
 	if resp != nil {
 		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
 
-func (c *storageRESTClient) ReadMeta(bucket, object string) ([]byte, error) {
-	resp, err := c.call(context.Background(), http.MethodGet, "meta", objectValues(bucket, object), nil)
+func (c *storageRESTClient) ReadMeta(ctx context.Context, bucket, object string) ([]byte, error) {
+	resp, err := c.call(ctx, http.MethodGet, "meta", objectValues(bucket, object), nil)
 	if err != nil {
 		return nil, err
 	}
 	return readStorageRESTBody(resp)
 }
 
-func (c *storageRESTClient) WriteUploadMeta(bucket, object, uploadID, name string, data []byte) error {
+func (c *storageRESTClient) WriteUploadMeta(
+	ctx context.Context,
+	bucket, object, uploadID, name string,
+	data []byte,
+) error {
 	values := uploadValues(bucket, object, uploadID, name)
-	resp, err := c.call(context.Background(), http.MethodPut, "upload-meta", values, bytes.NewReader(data))
+	resp, err := c.call(ctx, http.MethodPut, "upload-meta", values, bytes.NewReader(data))
 	if resp != nil {
 		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
 
-func (c *storageRESTClient) ReadUploadMeta(bucket, object, uploadID, name string) ([]byte, error) {
+func (c *storageRESTClient) ReadUploadMeta(
+	ctx context.Context,
+	bucket, object, uploadID, name string,
+) ([]byte, error) {
 	resp, err := c.call(
-		context.Background(),
+		ctx,
 		http.MethodGet,
 		"upload-meta",
 		uploadValues(bucket, object, uploadID, name),
@@ -240,9 +247,9 @@ func (c *storageRESTClient) ReadUploadMeta(bucket, object, uploadID, name string
 	return readStorageRESTBody(resp)
 }
 
-func (c *storageRESTClient) DeleteUpload(bucket, object, uploadID string) error {
+func (c *storageRESTClient) DeleteUpload(ctx context.Context, bucket, object, uploadID string) error {
 	resp, err := c.call(
-		context.Background(),
+		ctx,
 		http.MethodDelete,
 		"upload",
 		uploadValues(bucket, object, uploadID, ""),
@@ -254,17 +261,17 @@ func (c *storageRESTClient) DeleteUpload(bucket, object, uploadID string) error 
 	return err
 }
 
-func (c *storageRESTClient) DeleteObject(bucket, object string) error {
-	resp, err := c.call(context.Background(), http.MethodDelete, "object", objectValues(bucket, object), nil)
+func (c *storageRESTClient) DeleteObject(ctx context.Context, bucket, object string) error {
+	resp, err := c.call(ctx, http.MethodDelete, "object", objectValues(bucket, object), nil)
 	if resp != nil {
 		err = errors.Join(err, resp.Body.Close())
 	}
 	return err
 }
 
-func (c *storageRESTClient) ListObjects(bucket, prefix string) ([]string, error) {
+func (c *storageRESTClient) ListObjects(ctx context.Context, bucket, prefix string) ([]string, error) {
 	resp, err := c.call(
-		context.Background(),
+		ctx,
 		http.MethodGet,
 		"objects",
 		url.Values{"bucket": {bucket}, "prefix": {prefix}},

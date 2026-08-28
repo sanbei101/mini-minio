@@ -45,7 +45,7 @@ type erasureObjects struct {
 	dataBlocks    int
 	parityBlocks  int
 	pool          *bpool.BytePoolCap
-	mu            sync.Mutex
+	bucketLocks   sync.Map
 	objectLocks   sync.Map
 	erasureEngine erasure.Erasure
 }
@@ -69,10 +69,13 @@ func newErasureObjects(
 	}, nil
 }
 
-func (e *erasureObjects) statBucket(bucket string) (os.FileInfo, error) {
+func (e *erasureObjects) statBucket(ctx context.Context, bucket string) (os.FileInfo, error) {
 	var firstErr error
 	for _, disk := range e.disks {
-		info, err := disk.StatBucket(bucket)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		info, err := disk.StatBucket(ctx, bucket)
 		if err == nil {
 			return info, nil
 		}
@@ -108,7 +111,7 @@ func mergeBucketInfos(perDisk [][]BucketInfo) []BucketInfo {
 	return buckets
 }
 
-func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
+func (e *erasureObjects) listBucketInfos(ctx context.Context) ([]BucketInfo, error) {
 	type result struct {
 		infos []BucketInfo
 		err   error
@@ -116,10 +119,13 @@ func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 	results := make([]result, len(e.disks))
 	var wg sync.WaitGroup
 	for i, disk := range e.disks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		wg.Add(1)
 		go func(idx int, d storage.API) {
 			defer wg.Done()
-			infos, err := d.ListBuckets()
+			infos, err := d.ListBuckets(ctx)
 			if err != nil {
 				results[idx] = result{err: err}
 				return
@@ -155,16 +161,19 @@ func (e *erasureObjects) listBucketInfos() ([]BucketInfo, error) {
 	return mergeBucketInfos(perDisk), nil
 }
 
-func (e *erasureObjects) MakeBucket(_ context.Context, bucket string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *erasureObjects) MakeBucket(ctx context.Context, bucket string) error {
+	lock := e.bucketLock(bucket)
+	if err := lock.Lock(ctx); err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	errs := make([]error, len(e.disks))
 	var wg sync.WaitGroup
 	for i, d := range e.disks {
 		wg.Add(1)
 		go func(idx int, disk storage.API) {
 			defer wg.Done()
-			err := disk.MakeBucket(bucket)
+			err := disk.MakeBucket(ctx, bucket)
 			if errors.Is(err, storage.ErrBucketExists) {
 				err = nil
 			}
@@ -180,8 +189,8 @@ func (e *erasureObjects) MakeBucket(_ context.Context, bucket string) error {
 	return nil
 }
 
-func (e *erasureObjects) GetBucketInfo(_ context.Context, bucket string) (BucketInfo, error) {
-	fi, err := e.statBucket(bucket)
+func (e *erasureObjects) GetBucketInfo(ctx context.Context, bucket string) (BucketInfo, error) {
+	fi, err := e.statBucket(ctx, bucket)
 	if errors.Is(err, storage.ErrNotFound) {
 		return BucketInfo{}, ErrBucketNotFound
 	}
@@ -191,20 +200,23 @@ func (e *erasureObjects) GetBucketInfo(_ context.Context, bucket string) (Bucket
 	return BucketInfo{Name: bucket, Created: fi.ModTime()}, nil
 }
 
-func (e *erasureObjects) ListBuckets(_ context.Context) ([]BucketInfo, error) {
-	return e.listBucketInfos()
+func (e *erasureObjects) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
+	return e.listBucketInfos(ctx)
 }
 
-func (e *erasureObjects) DeleteBucket(_ context.Context, bucket string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *erasureObjects) DeleteBucket(ctx context.Context, bucket string) error {
+	lock := e.bucketLock(bucket)
+	if err := lock.Lock(ctx); err != nil {
+		return err
+	}
+	defer lock.Unlock()
 	var wg sync.WaitGroup
 	errs := make([]error, len(e.disks))
 	for i, d := range e.disks {
 		wg.Add(1)
 		go func(idx int, disk storage.API) {
 			defer wg.Done()
-			err := disk.DeleteBucket(bucket)
+			err := disk.DeleteBucket(ctx, bucket)
 			if os.IsNotExist(err) {
 				err = nil
 			}
@@ -222,10 +234,12 @@ func (e *erasureObjects) DeleteBucket(_ context.Context, bucket string) error {
 
 func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, data *PutObjReader) (ObjectInfo, error) {
 	lock := e.objectLock(bucket, object)
-	lock.Lock()
+	if err := lock.Lock(ctx); err != nil {
+		return ObjectInfo{}, err
+	}
 	defer lock.Unlock()
 
-	oldMeta, err := e.readMeta(bucket, object)
+	oldMeta, err := e.readMeta(ctx, bucket, object)
 	if err != nil && !errors.Is(err, ErrObjectNotFound) {
 		return ObjectInfo{}, err
 	}
@@ -233,7 +247,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 	dataDir := uuid.New().String()
 	n, err := e.writePart(ctx, bucket, object, dataDir, 1, data)
 	if err != nil {
-		e.cleanupObjectData(bucket, object, dataDir, nil)
+		e.cleanupObjectData(ctx, bucket, object, dataDir, nil)
 		return ObjectInfo{}, err
 	}
 
@@ -287,7 +301,7 @@ func (e *erasureObjects) writePart(
 			}
 			return 0, ferr
 		}
-		files[i] = storage.NewBufferedShardWriter(f, 2)
+		files[i] = storage.NewBufferedShardWriter(ctx, f, 2)
 		writers[i] = files[i]
 	}
 
@@ -318,7 +332,7 @@ func (e *erasureObjects) writePart(
 	return n, nil
 }
 
-func (e *erasureObjects) commitMeta(_ context.Context, bucket, object string, oldMeta, meta *xlMeta) error {
+func (e *erasureObjects) commitMeta(ctx context.Context, bucket, object string, oldMeta, meta *xlMeta) error {
 	writeQuorum := e.dataBlocks
 	if e.dataBlocks == e.parityBlocks {
 		writeQuorum++
@@ -339,7 +353,7 @@ func (e *erasureObjects) commitMeta(_ context.Context, bucket, object string, ol
 				metaErrs[idx] = err
 				return
 			}
-			if err := disk.WriteMetaTmp(bucket, object, data); err != nil {
+			if err := disk.WriteMetaTmp(ctx, bucket, object, data); err != nil {
 				metaErrs[idx] = err
 				return
 			}
@@ -355,7 +369,7 @@ func (e *erasureObjects) commitMeta(_ context.Context, bucket, object string, ol
 		}
 	}
 	if writeOK < writeQuorum {
-		e.cleanupObjectData(bucket, object, meta.DataDir, nil)
+		e.cleanupObjectData(ctx, bucket, object, meta.DataDir, nil)
 		return fmt.Errorf("metadata write quorum not met (%d/%d)", writeOK, writeQuorum)
 	}
 
@@ -369,7 +383,7 @@ func (e *erasureObjects) commitMeta(_ context.Context, bucket, object string, ol
 		renameWg.Add(1)
 		go func(idx int, disk storage.API) {
 			defer renameWg.Done()
-			renameErrs[idx] = disk.RenameMeta(bucket, object)
+			renameErrs[idx] = disk.RenameMeta(ctx, bucket, object)
 		}(i, d)
 	}
 	renameWg.Wait()
@@ -383,27 +397,63 @@ func (e *erasureObjects) commitMeta(_ context.Context, bucket, object string, ol
 		renameOK++
 	}
 	if oldMeta != nil && oldMeta.DataDir != meta.DataDir {
-		e.cleanupObjectData(bucket, object, oldMeta.DataDir, renamed)
+		e.cleanupObjectData(ctx, bucket, object, oldMeta.DataDir, renamed)
 	}
 
 	uncommitted := make([]bool, len(e.disks))
 	for i := range uncommitted {
 		uncommitted[i] = !renamed[i]
 	}
-	e.cleanupObjectData(bucket, object, meta.DataDir, uncommitted)
+	e.cleanupObjectData(ctx, bucket, object, meta.DataDir, uncommitted)
 	if renameOK < writeQuorum {
 		return fmt.Errorf("metadata rename quorum not met (%d/%d)", renameOK, writeQuorum)
 	}
 	return nil
 }
 
-func (e *erasureObjects) objectLock(bucket, object string) *sync.Mutex {
-	key := bucket + "\x00" + object
-	lock, _ := e.objectLocks.LoadOrStore(key, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+type contextMutex struct {
+	token chan struct{}
 }
 
-func (e *erasureObjects) cleanupObjectData(bucket, object, dataDir string, selected []bool) {
+func newContextMutex() *contextMutex {
+	m := &contextMutex{token: make(chan struct{}, 1)}
+	m.token <- struct{}{}
+	return m
+}
+
+func (m *contextMutex) Lock(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.token:
+		return nil
+	}
+}
+
+func (m *contextMutex) Unlock() {
+	select {
+	case m.token <- struct{}{}:
+	default:
+		panic("unlock of unlocked contextMutex")
+	}
+}
+
+func (e *erasureObjects) objectLock(bucket, object string) *contextMutex {
+	key := bucket + "\x00" + object
+	lock, _ := e.objectLocks.LoadOrStore(key, newContextMutex())
+	return lock.(*contextMutex)
+}
+
+func (e *erasureObjects) bucketLock(bucket string) *contextMutex {
+	lock, _ := e.bucketLocks.LoadOrStore(bucket, newContextMutex())
+	return lock.(*contextMutex)
+}
+
+func (e *erasureObjects) cleanupObjectData(
+	ctx context.Context,
+	bucket, object, dataDir string,
+	selected []bool,
+) {
 	var wg sync.WaitGroup
 	for i, disk := range e.disks {
 		if selected != nil && !selected[i] {
@@ -412,7 +462,7 @@ func (e *erasureObjects) cleanupObjectData(bucket, object, dataDir string, selec
 		wg.Add(1)
 		go func(d storage.API) {
 			defer wg.Done()
-			if err := d.DeleteObjectData(bucket, object, dataDir); err != nil {
+			if err := d.DeleteObjectData(ctx, bucket, object, dataDir); err != nil {
 				log.Warn().Err(err).Str("bucket", bucket).Str("object", object).Msg("object data cleanup failed")
 			}
 		}(disk)
@@ -420,8 +470,8 @@ func (e *erasureObjects) cleanupObjectData(bucket, object, dataDir string, selec
 	wg.Wait()
 }
 
-func (e *erasureObjects) GetObjectInfo(_ context.Context, bucket, object string) (ObjectInfo, error) {
-	meta, err := e.readMeta(bucket, object)
+func (e *erasureObjects) GetObjectInfo(ctx context.Context, bucket, object string) (ObjectInfo, error) {
+	meta, err := e.readMeta(ctx, bucket, object)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
@@ -441,7 +491,7 @@ func (e *erasureObjects) GetObjectNInfo(
 	bucket, object string,
 	rs *HTTPRangeSpec,
 ) (*GetObjectReader, error) {
-	meta, err := e.readMeta(bucket, object)
+	meta, err := e.readMeta(ctx, bucket, object)
 	if err != nil {
 		return nil, err
 	}
@@ -537,7 +587,9 @@ func closeShardReaders(closers []io.Closer) error {
 
 func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string) (ObjectInfo, error) {
 	lock := e.objectLock(bucket, object)
-	lock.Lock()
+	if err := lock.Lock(ctx); err != nil {
+		return ObjectInfo{}, err
+	}
 	defer lock.Unlock()
 
 	info, err := e.GetObjectInfo(ctx, bucket, object)
@@ -545,13 +597,9 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 		return ObjectInfo{}, err
 	}
 
-	e.mu.Lock()
-	disks := e.disks
-	e.mu.Unlock()
-
-	errs := make([]error, len(disks))
+	errs := make([]error, len(e.disks))
 	var wg sync.WaitGroup
-	for i, d := range disks {
+	for i, d := range e.disks {
 		wg.Add(1)
 		go func(idx int, disk storage.API) {
 			defer wg.Done()
@@ -564,7 +612,7 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 				errs[idx] = errors.New("disk not found")
 				return
 			}
-			errs[idx] = disk.DeleteObject(bucket, object)
+			errs[idx] = disk.DeleteObject(ctx, bucket, object)
 		}(i, d)
 	}
 	wg.Wait()
@@ -583,18 +631,18 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 			continue
 		}
 	}
-	writeQuorum := len(disks)/2 + 1
-	successCount := len(disks) - failCount
+	writeQuorum := len(e.disks)/2 + 1
+	successCount := len(e.disks) - failCount
 
 	if successCount < writeQuorum {
-		return ObjectInfo{}, fmt.Errorf("delete failed: only %d/%d disks succeeded", successCount, len(disks))
+		return ObjectInfo{}, fmt.Errorf("delete failed: only %d/%d disks succeeded", successCount, len(e.disks))
 	}
 
 	return info, nil
 }
 
 // readMeta reads xl.meta from all disks in parallel and picks the best via quorum.
-func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
+func (e *erasureObjects) readMeta(ctx context.Context, bucket, object string) (*xlMeta, error) {
 	metas := make([]*xlMeta, len(e.disks))
 	errs := make([]error, len(e.disks))
 	var wg sync.WaitGroup
@@ -603,7 +651,7 @@ func (e *erasureObjects) readMeta(bucket, object string) (*xlMeta, error) {
 		go func(idx int, disk storage.API) {
 			defer wg.Done()
 			var m xlMeta
-			data, err := disk.ReadMeta(bucket, object)
+			data, err := disk.ReadMeta(ctx, bucket, object)
 			if err != nil {
 				errs[idx] = err
 				return
@@ -680,7 +728,7 @@ func (e *erasureObjects) NewMultipartUpload(ctx context.Context, bucket, object 
 	}
 	uploadID := uuid.New().String()
 	state := multipartState{Bucket: bucket, Object: object, DataDir: uuid.New().String()}
-	if err := e.writeUploadMeta(bucket, object, uploadID, "state", state); err != nil {
+	if err := e.writeUploadMeta(ctx, bucket, object, uploadID, "state", state); err != nil {
 		return "", err
 	}
 	return uploadID, nil
@@ -695,7 +743,7 @@ func (e *erasureObjects) PutObjectPart(
 	if partNumber < 1 {
 		return ObjectPartInfo{}, errors.New("invalid part number")
 	}
-	state, err := e.readMultipartState(bucket, object, uploadID)
+	state, err := e.readMultipartState(ctx, bucket, object, uploadID)
 	if err != nil {
 		return ObjectPartInfo{}, err
 	}
@@ -710,7 +758,7 @@ func (e *erasureObjects) PutObjectPart(
 		ActualSize: n,
 		ModTime:    time.Now().UTC(),
 	}
-	if err := e.writeUploadMeta(bucket, object, uploadID, multipartPartName(partNumber), part); err != nil {
+	if err := e.writeUploadMeta(ctx, bucket, object, uploadID, multipartPartName(partNumber), part); err != nil {
 		return ObjectPartInfo{}, err
 	}
 	return part, nil
@@ -722,10 +770,12 @@ func (e *erasureObjects) CompleteMultipartUpload(
 	partNumbers []int,
 ) (ObjectInfo, error) {
 	lock := e.objectLock(bucket, object)
-	lock.Lock()
+	if err := lock.Lock(ctx); err != nil {
+		return ObjectInfo{}, err
+	}
 	defer lock.Unlock()
 
-	state, err := e.readMultipartState(bucket, object, uploadID)
+	state, err := e.readMultipartState(ctx, bucket, object, uploadID)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
@@ -737,7 +787,7 @@ func (e *erasureObjects) CompleteMultipartUpload(
 			return ObjectInfo{}, fmt.Errorf("part %d selected more than once", number)
 		}
 		seen[number] = true
-		part, err := e.readMultipartPart(bucket, object, uploadID, number)
+		part, err := e.readMultipartPart(ctx, bucket, object, uploadID, number)
 		if err != nil {
 			return ObjectInfo{}, err
 		}
@@ -748,7 +798,7 @@ func (e *erasureObjects) CompleteMultipartUpload(
 		return ObjectInfo{}, errors.New("multipart upload has no parts")
 	}
 
-	oldMeta, err := e.readMeta(bucket, object)
+	oldMeta, err := e.readMeta(ctx, bucket, object)
 	if err != nil && !errors.Is(err, ErrObjectNotFound) {
 		return ObjectInfo{}, err
 	}
@@ -770,7 +820,7 @@ func (e *erasureObjects) CompleteMultipartUpload(
 	if err := e.commitMeta(ctx, bucket, object, oldMeta, &meta); err != nil {
 		return ObjectInfo{}, err
 	}
-	if err := e.deleteUpload(bucket, object, uploadID); err != nil {
+	if err := e.deleteUpload(ctx, bucket, object, uploadID); err != nil {
 		return ObjectInfo{}, err
 	}
 	return ObjectInfo{
@@ -784,16 +834,20 @@ func (e *erasureObjects) CompleteMultipartUpload(
 	}, nil
 }
 
-func (e *erasureObjects) AbortMultipartUpload(_ context.Context, bucket, object, uploadID string) error {
-	state, err := e.readMultipartState(bucket, object, uploadID)
+func (e *erasureObjects) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {
+	state, err := e.readMultipartState(ctx, bucket, object, uploadID)
 	if err != nil {
 		return err
 	}
-	e.cleanupObjectData(bucket, object, state.DataDir, nil)
-	return e.deleteUpload(bucket, object, uploadID)
+	e.cleanupObjectData(ctx, bucket, object, state.DataDir, nil)
+	return e.deleteUpload(ctx, bucket, object, uploadID)
 }
 
-func (e *erasureObjects) writeUploadMeta(bucket, object, uploadID, name string, value any) error {
+func (e *erasureObjects) writeUploadMeta(
+	ctx context.Context,
+	bucket, object, uploadID, name string,
+	value any,
+) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -804,16 +858,19 @@ func (e *erasureObjects) writeUploadMeta(bucket, object, uploadID, name string, 
 		wg.Add(1)
 		go func(index int, drive storage.API) {
 			defer wg.Done()
-			errs[index] = drive.WriteUploadMeta(bucket, object, uploadID, name, data)
+			errs[index] = drive.WriteUploadMeta(ctx, bucket, object, uploadID, name, data)
 		}(i, disk)
 	}
 	wg.Wait()
 	return e.checkWriteQuorum(errs, "upload metadata")
 }
 
-func (e *erasureObjects) readMultipartState(bucket, object, uploadID string) (multipartState, error) {
+func (e *erasureObjects) readMultipartState(
+	ctx context.Context,
+	bucket, object, uploadID string,
+) (multipartState, error) {
 	var state multipartState
-	if err := e.readUploadMeta(bucket, object, uploadID, "state", &state); err != nil {
+	if err := e.readUploadMeta(ctx, bucket, object, uploadID, "state", &state); err != nil {
 		return multipartState{}, err
 	}
 	if state.Bucket != bucket || state.Object != object || state.DataDir == "" {
@@ -822,9 +879,13 @@ func (e *erasureObjects) readMultipartState(bucket, object, uploadID string) (mu
 	return state, nil
 }
 
-func (e *erasureObjects) readMultipartPart(bucket, object, uploadID string, partNumber int) (ObjectPartInfo, error) {
+func (e *erasureObjects) readMultipartPart(
+	ctx context.Context,
+	bucket, object, uploadID string,
+	partNumber int,
+) (ObjectPartInfo, error) {
 	var part ObjectPartInfo
-	if err := e.readUploadMeta(bucket, object, uploadID, multipartPartName(partNumber), &part); err != nil {
+	if err := e.readUploadMeta(ctx, bucket, object, uploadID, multipartPartName(partNumber), &part); err != nil {
 		return ObjectPartInfo{}, err
 	}
 	if part.Number != partNumber {
@@ -833,9 +894,16 @@ func (e *erasureObjects) readMultipartPart(bucket, object, uploadID string, part
 	return part, nil
 }
 
-func (e *erasureObjects) readUploadMeta(bucket, object, uploadID, name string, out any) error {
+func (e *erasureObjects) readUploadMeta(
+	ctx context.Context,
+	bucket, object, uploadID, name string,
+	out any,
+) error {
 	for _, disk := range e.disks {
-		data, err := disk.ReadUploadMeta(bucket, object, uploadID, name)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		data, err := disk.ReadUploadMeta(ctx, bucket, object, uploadID, name)
 		if err == nil {
 			return json.Unmarshal(data, out)
 		}
@@ -843,14 +911,14 @@ func (e *erasureObjects) readUploadMeta(bucket, object, uploadID, name string, o
 	return errors.New("multipart upload not found")
 }
 
-func (e *erasureObjects) deleteUpload(bucket, object, uploadID string) error {
+func (e *erasureObjects) deleteUpload(ctx context.Context, bucket, object, uploadID string) error {
 	errs := make([]error, len(e.disks))
 	var wg sync.WaitGroup
 	for i, disk := range e.disks {
 		wg.Add(1)
 		go func(index int, drive storage.API) {
 			defer wg.Done()
-			errs[index] = drive.DeleteUpload(bucket, object, uploadID)
+			errs[index] = drive.DeleteUpload(ctx, bucket, object, uploadID)
 		}(i, disk)
 	}
 	wg.Wait()

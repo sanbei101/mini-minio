@@ -27,7 +27,10 @@ func NewDisk(path string) (*Disk, error) {
 	return &Disk{path: path}, nil
 }
 
-func (d *Disk) MakeBucket(bucket string) error {
+func (d *Disk) MakeBucket(ctx context.Context, bucket string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	p := filepath.Join(d.path, bucket)
 	if _, err := os.Stat(p); err == nil {
 		return ErrBucketExists
@@ -35,17 +38,26 @@ func (d *Disk) MakeBucket(bucket string) error {
 	return os.Mkdir(p, 0o755)
 }
 
-func (d *Disk) DeleteBucket(bucket string) error {
+func (d *Disk) DeleteBucket(ctx context.Context, bucket string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return os.Remove(filepath.Join(d.path, bucket))
 }
 
-func (d *Disk) ListBuckets() ([]os.FileInfo, error) {
+func (d *Disk) ListBuckets(ctx context.Context) ([]os.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(d.path)
 	if err != nil {
 		return nil, err
 	}
 	var infos []os.FileInfo
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if e.IsDir() {
 			fi, err := e.Info()
 			if err == nil {
@@ -56,7 +68,10 @@ func (d *Disk) ListBuckets() ([]os.FileInfo, error) {
 	return infos, nil
 }
 
-func (d *Disk) StatBucket(bucket string) (os.FileInfo, error) {
+func (d *Disk) StatBucket(ctx context.Context, bucket string) (os.FileInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	fi, err := os.Stat(filepath.Join(d.path, bucket))
 	if os.IsNotExist(err) {
 		return nil, ErrNotFound
@@ -92,12 +107,18 @@ func (d *Disk) ReadShardFile(ctx context.Context, bucket, object, dataDir string
 	return f, nil
 }
 
-func (d *Disk) DeleteObjectData(bucket, object, dataDir string) error {
+func (d *Disk) DeleteObjectData(ctx context.Context, bucket, object, dataDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return os.RemoveAll(filepath.Join(d.path, bucket, object, dataDir))
 }
 
 // WriteMetaTmp writes metadata to a temporary file. Returns the tmp path on success.
-func (d *Disk) WriteMetaTmp(bucket, object string, data []byte) error {
+func (d *Disk) WriteMetaTmp(ctx context.Context, bucket, object string, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir := filepath.Join(d.path, bucket, object)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -110,14 +131,20 @@ func (d *Disk) WriteMetaTmp(bucket, object string, data []byte) error {
 }
 
 // RenameMeta atomically renames the temp metadata file to the final xl.meta.
-func (d *Disk) RenameMeta(bucket, object string) error {
+func (d *Disk) RenameMeta(ctx context.Context, bucket, object string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir := filepath.Join(d.path, bucket, object)
 	tmp := filepath.Join(dir, metaFile+".tmp")
 	dst := filepath.Join(dir, metaFile)
 	return os.Rename(tmp, dst)
 }
 
-func (d *Disk) ReadMeta(bucket, object string) ([]byte, error) {
+func (d *Disk) ReadMeta(ctx context.Context, bucket, object string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(filepath.Join(d.path, bucket, object, metaFile))
 	if os.IsNotExist(err) {
 		return nil, ErrNotFound
@@ -128,7 +155,10 @@ func (d *Disk) ReadMeta(bucket, object string) ([]byte, error) {
 	return data, nil
 }
 
-func (d *Disk) WriteUploadMeta(bucket, object, uploadID, name string, data []byte) error {
+func (d *Disk) WriteUploadMeta(ctx context.Context, bucket, object, uploadID, name string, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir := d.uploadDir(bucket, object, uploadID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -136,7 +166,10 @@ func (d *Disk) WriteUploadMeta(bucket, object, uploadID, name string, data []byt
 	return os.WriteFile(filepath.Join(dir, name+".json"), data, 0o644)
 }
 
-func (d *Disk) ReadUploadMeta(bucket, object, uploadID, name string) ([]byte, error) {
+func (d *Disk) ReadUploadMeta(ctx context.Context, bucket, object, uploadID, name string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(filepath.Join(d.uploadDir(bucket, object, uploadID), name+".json"))
 	if os.IsNotExist(err) {
 		return nil, ErrNotFound
@@ -144,15 +177,24 @@ func (d *Disk) ReadUploadMeta(bucket, object, uploadID, name string) ([]byte, er
 	return data, err
 }
 
-func (d *Disk) DeleteUpload(bucket, object, uploadID string) error {
+func (d *Disk) DeleteUpload(ctx context.Context, bucket, object, uploadID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return os.RemoveAll(d.uploadDir(bucket, object, uploadID))
 }
 
-func (d *Disk) DeleteObject(bucket, object string) error {
+func (d *Disk) DeleteObject(ctx context.Context, bucket, object string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return os.RemoveAll(filepath.Join(d.path, bucket, object))
 }
 
-func (d *Disk) ListObjects(bucket, prefix string) ([]string, error) {
+func (d *Disk) ListObjects(ctx context.Context, bucket, prefix string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(d.path, bucket)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil, ErrNotFound
@@ -179,6 +221,9 @@ func (d *Disk) ListObjects(bucket, prefix string) ([]string, error) {
 
 	names := make([]string, 0)
 	err := filepath.WalkDir(walkDir, func(path string, entry os.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return err
 		}

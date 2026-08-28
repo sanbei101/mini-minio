@@ -127,12 +127,12 @@ func (s *erasureSets) DeleteBucket(ctx context.Context, bucket string) error {
 }
 
 func (s *erasureSets) ListObjectsV2(
-	_ context.Context,
+	ctx context.Context,
 	bucket, prefix, continuationToken, delimiter string,
 	maxKeys int,
 	startAfter string,
 ) (ListObjectsV2Info, error) {
-	names, err := s.listObjectNames(bucket, prefix)
+	names, err := s.listObjectNames(ctx, bucket, prefix)
 	if err != nil {
 		return ListObjectsV2Info{}, err
 	}
@@ -160,6 +160,9 @@ func (s *erasureSets) ListObjectsV2(
 	seenPrefix := map[string]bool{}
 
 	for i, name := range names {
+		if err := ctx.Err(); err != nil {
+			return ListObjectsV2Info{}, err
+		}
 		if len(result.Objects)+len(result.Prefixes) >= maxKeys {
 			result.IsTruncated = true
 			result.NextContinuationToken = names[i-1]
@@ -178,7 +181,7 @@ func (s *erasureSets) ListObjectsV2(
 			}
 		}
 
-		meta, err := s.setForObject(name).readMeta(bucket, name)
+		meta, err := s.setForObject(name).readMeta(ctx, bucket, name)
 		if err != nil {
 			continue
 		}
@@ -240,7 +243,7 @@ func (s *erasureSets) AbortMultipartUpload(ctx context.Context, bucket, object, 
 	return s.setForObject(object).AbortMultipartUpload(ctx, bucket, object, uploadID)
 }
 
-func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
+func (s *erasureSets) listObjectNames(ctx context.Context, bucket, prefix string) ([]string, error) {
 	seen := map[string]bool{}
 	names := []string{}
 	var foundBucket bool
@@ -259,7 +262,7 @@ func (s *erasureSets) listObjectNames(bucket, prefix string) ([]string, error) {
 		wg.Add(1)
 		go func(idx int, d storage.API) {
 			defer wg.Done()
-			diskNames, err := d.ListObjects(bucket, prefix)
+			diskNames, err := d.ListObjects(ctx, bucket, prefix)
 			results[idx] = result{names: diskNames, err: err}
 		}(i, disk)
 	}

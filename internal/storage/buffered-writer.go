@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"io"
 	"sync"
@@ -8,8 +9,9 @@ import (
 
 // NewBufferedShardWriter decouples erasure encoding from one drive's I/O.
 // Capacity is counted in complete erasure blocks.
-func NewBufferedShardWriter(dst ShardWriter, capacity int) ShardWriter {
+func NewBufferedShardWriter(ctx context.Context, dst ShardWriter, capacity int) ShardWriter {
 	w := &bufferedShardWriter{
+		ctx:    ctx,
 		dst:    dst,
 		chunks: make(chan []byte, capacity),
 		done:   make(chan struct{}),
@@ -19,6 +21,7 @@ func NewBufferedShardWriter(dst ShardWriter, capacity int) ShardWriter {
 }
 
 type bufferedShardWriter struct {
+	ctx    context.Context
 	dst    ShardWriter
 	chunks chan []byte
 	done   chan struct{}
@@ -43,8 +46,12 @@ func (w *bufferedShardWriter) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	chunk := append([]byte(nil), p...)
-	w.chunks <- chunk
-	return len(p), nil
+	select {
+	case <-w.ctx.Done():
+		return 0, w.ctx.Err()
+	case w.chunks <- chunk:
+		return len(p), nil
+	}
 }
 
 func (w *bufferedShardWriter) Close() error {
@@ -53,7 +60,15 @@ func (w *bufferedShardWriter) Close() error {
 		w.closed = true
 		close(w.chunks)
 		w.stateMu.Unlock()
-		<-w.done
+		select {
+		case <-w.done:
+		case <-w.ctx.Done():
+			w.errMu.Lock()
+			if w.err == nil {
+				w.err = w.ctx.Err()
+			}
+			w.errMu.Unlock()
+		}
 	})
 	w.errMu.Lock()
 	defer w.errMu.Unlock()

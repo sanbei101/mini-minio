@@ -40,15 +40,15 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 	switch operation {
 	case "bucket":
 		if r.Method == http.MethodPut {
-			writeStorageRESTError(w, drive.MakeBucket(bucket))
+			writeStorageRESTError(w, drive.MakeBucket(r.Context(), bucket))
 			return
 		}
 		if r.Method == http.MethodDelete {
-			writeStorageRESTError(w, drive.DeleteBucket(bucket))
+			writeStorageRESTError(w, drive.DeleteBucket(r.Context(), bucket))
 			return
 		}
 		if r.Method == http.MethodGet {
-			info, err := drive.StatBucket(bucket)
+			info, err := drive.StatBucket(r.Context(), bucket)
 			if err != nil {
 				writeStorageRESTError(w, err)
 				return
@@ -58,7 +58,7 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 		}
 	case "buckets":
 		if r.Method == http.MethodGet {
-			infos, err := drive.ListBuckets()
+			infos, err := drive.ListBuckets(r.Context())
 			if err != nil {
 				writeStorageRESTError(w, err)
 				return
@@ -115,20 +115,20 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 		}
 	case "data":
 		if r.Method == http.MethodDelete {
-			writeStorageRESTError(w, drive.DeleteObjectData(bucket, object, r.URL.Query().Get("data-dir")))
+			writeStorageRESTError(w, drive.DeleteObjectData(r.Context(), bucket, object, r.URL.Query().Get("data-dir")))
 			return
 		}
 	case "meta":
 		if r.Method == http.MethodPut {
 			data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 			if err == nil {
-				err = drive.WriteMetaTmp(bucket, object, data)
+				err = drive.WriteMetaTmp(r.Context(), bucket, object, data)
 			}
 			writeStorageRESTError(w, err)
 			return
 		}
 		if r.Method == http.MethodGet {
-			data, err := drive.ReadMeta(bucket, object)
+			data, err := drive.ReadMeta(r.Context(), bucket, object)
 			if err != nil {
 				writeStorageRESTError(w, err)
 				return
@@ -138,7 +138,7 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 		}
 	case "rename-meta":
 		if r.Method == http.MethodPost {
-			writeStorageRESTError(w, drive.RenameMeta(bucket, object))
+			writeStorageRESTError(w, drive.RenameMeta(r.Context(), bucket, object))
 			return
 		}
 	case "upload-meta":
@@ -150,13 +150,13 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 		if r.Method == http.MethodPut {
 			data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 			if err == nil {
-				err = drive.WriteUploadMeta(bucket, object, uploadID, name, data)
+				err = drive.WriteUploadMeta(r.Context(), bucket, object, uploadID, name, data)
 			}
 			writeStorageRESTError(w, err)
 			return
 		}
 		if r.Method == http.MethodGet {
-			data, err := drive.ReadUploadMeta(bucket, object, uploadID, name)
+			data, err := drive.ReadUploadMeta(r.Context(), bucket, object, uploadID, name)
 			if err != nil {
 				writeStorageRESTError(w, err)
 				return
@@ -171,17 +171,17 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 				writeStorageRESTError(w, errors.New("invalid upload ID"))
 				return
 			}
-			writeStorageRESTError(w, drive.DeleteUpload(bucket, object, uploadID))
+			writeStorageRESTError(w, drive.DeleteUpload(r.Context(), bucket, object, uploadID))
 			return
 		}
 	case "object":
 		if r.Method == http.MethodDelete {
-			writeStorageRESTError(w, drive.DeleteObject(bucket, object))
+			writeStorageRESTError(w, drive.DeleteObject(r.Context(), bucket, object))
 			return
 		}
 	case "objects":
 		if r.Method == http.MethodGet {
-			names, err := drive.ListObjects(bucket, r.URL.Query().Get("prefix"))
+			names, err := drive.ListObjects(r.Context(), bucket, r.URL.Query().Get("prefix"))
 			if err != nil {
 				writeStorageRESTError(w, err)
 				return
