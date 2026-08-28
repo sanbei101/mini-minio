@@ -66,8 +66,11 @@ func NewCluster(config ClusterConfig) (ObjectLayer, http.Handler, error) {
 }
 
 func clusterConfigHash(config ClusterConfig) string {
-	h := sha256.New()
-	_, _ = h.Write([]byte(strings.Join(config.Endpoints, "\x00")))
-	_, _ = fmt.Fprintf(h, "\x00%d\x00%d", config.DataBlocks, config.ParityBlocks)
-	return hex.EncodeToString(h.Sum(nil))
+	payload := fmt.Sprintf("%s\x00%d\x00%d",
+		strings.Join(config.Endpoints, "\x00"),
+		config.DataBlocks,
+		config.ParityBlocks,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
 }

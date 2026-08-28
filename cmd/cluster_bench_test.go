@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/phuslu/log"
 	"github.com/sanbei101/mini-minio/cmd"
 )
 
@@ -158,10 +160,15 @@ func setupClusterBenchmark(b *testing.B) (cmd.ObjectLayer, cmd.ObjectLayer, stri
 		b.Fatal(err)
 	}
 	b.Cleanup(func() {
-		listenerA.Close()
-		listenerB.Close()
+		err = listenerA.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("failed to close listenerA")
+		}
+		err = listenerB.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("failed to close listenerB")
+		}
 	})
-
 	nodeAURL := "http://" + listenerA.Addr().String()
 	nodeBURL := "http://" + listenerB.Addr().String()
 	endpoints := []string{
@@ -191,14 +198,12 @@ func setupClusterBenchmark(b *testing.B) (cmd.ObjectLayer, cmd.ObjectLayer, stri
 	serverA := &http.Server{Handler: storageA}
 	serverB := &http.Server{Handler: storageB}
 	go func() {
-		err = serverA.Serve(listenerA)
-		if err != nil {
+		if err := serverA.Serve(listenerA); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			b.Error(err)
 		}
 	}()
 	go func() {
-		err = serverB.Serve(listenerB)
-		if err != nil {
+		if err := serverB.Serve(listenerB); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			b.Error(err)
 		}
 	}()
@@ -216,11 +221,5 @@ func setupClusterBenchmark(b *testing.B) (cmd.ObjectLayer, cmd.ObjectLayer, stri
 	if err := objectA.MakeBucket(context.Background(), bucket); err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() {
-		err = objectA.DeleteBucket(context.Background(), bucket)
-		if err != nil {
-			b.Error(err)
-		}
-	})
 	return objectA, objectB, bucket
 }
