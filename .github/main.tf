@@ -16,7 +16,7 @@ terraform {
 }
 
 provider "alicloud" {
-  region  = "cn-hangzhou"
+  region = "cn-hangzhou"
 }
 
 variable "resource_group_id" {
@@ -101,15 +101,35 @@ resource "alicloud_instance" "spot_nodes" {
   vswitch_id                 = alicloud_vswitch.vswitch.id
   internet_max_bandwidth_out = 5
 
-  instance_charge_type       = "PostPaid"
-  spot_strategy              = "SpotAsPriceGo"
-  auto_release_time          = timeadd(timestamp(), "1h")
-  resource_group_id          = var.resource_group_id
-  key_name                   = alicloud_key_pair.key.key_pair_name
+  instance_charge_type = "PostPaid"
+  spot_strategy        = "SpotAsPriceGo"
+  auto_release_time    = timeadd(timestamp(), "1h")
+  resource_group_id    = var.resource_group_id
+  key_name             = alicloud_key_pair.key.key_pair_name
 
   lifecycle {
     ignore_changes = [auto_release_time]
   }
+}
+
+resource "alicloud_ecs_disk" "data" {
+  # ponytail: system disk stores d1; add a second data disk per node for isolated storage benchmarks.
+  count                = 2
+  zone_id              = data.alicloud_zones.default.zones[0].id
+  disk_name            = "spot-test-data-${count.index}"
+  category             = "cloud_essd"
+  performance_level    = "PL1"
+  size                 = 20
+  payment_type         = "PayAsYouGo"
+  delete_with_instance = true
+  resource_group_id    = var.resource_group_id
+}
+
+resource "alicloud_ecs_disk_attachment" "data" {
+  count = length(alicloud_ecs_disk.data)
+
+  disk_id     = alicloud_ecs_disk.data[count.index].id
+  instance_id = alicloud_instance.spot_nodes[count.index].id
 }
 
 output "node_ips" {
@@ -120,6 +140,14 @@ output "node_ips" {
       public_ip  = inst.public_ip
       private_ip = inst.primary_ip_address
     }
+  }
+}
+
+output "data_disk_devices" {
+  description = "各节点数据盘的 Linux 设备路径"
+  value = {
+    for index, attachment in alicloud_ecs_disk_attachment.data :
+    "node_${index}_d2" => attachment.device
   }
 }
 

@@ -284,11 +284,15 @@ jobs:
           NODE0_PRIV=$(terraform output -json node_ips | jq -r '.node_0.private_ip')
           NODE1_PUB=$(terraform output -json node_ips | jq -r '.node_1.public_ip')
           NODE1_PRIV=$(terraform output -json node_ips | jq -r '.node_1.private_ip')
+          NODE0_D2_DEVICE=$(terraform output -json data_disk_devices | jq -r '.node_0_d2')
+          NODE1_D2_DEVICE=$(terraform output -json data_disk_devices | jq -r '.node_1_d2')
 
           echo "NODE0_PUB=$NODE0_PUB" >> $GITHUB_ENV
           echo "NODE0_PRIV=$NODE0_PRIV" >> $GITHUB_ENV
           echo "NODE1_PUB=$NODE1_PUB" >> $GITHUB_ENV
           echo "NODE1_PRIV=$NODE1_PRIV" >> $GITHUB_ENV
+          echo "NODE0_D2_DEVICE=$NODE0_D2_DEVICE" >> $GITHUB_ENV
+          echo "NODE1_D2_DEVICE=$NODE1_D2_DEVICE" >> $GITHUB_ENV
 
       - name: Wait for SSH Readiness
         working-directory: .github
@@ -320,7 +324,20 @@ jobs:
 
           for IP in "$NODE0_PUB" "$NODE1_PUB"; do
             scp $SSH_OPTS mini-minio warp.deb root@$IP:/root/
-            ssh $SSH_OPTS root@$IP "dpkg -i /root/warp.deb; chmod +x /root/mini-minio; mkdir -p /data/d1 /data/d2"
+          done
+
+          mount_disk() {
+            local ip=$1 device=$2 mountpoint=$3
+            ssh $SSH_OPTS root@$ip "set -e; device='$device'; mountpoint='$mountpoint'; \
+              if ! blkid -s TYPE -o value \$device >/dev/null; then mkfs.ext4 -F \$device; fi; \
+              mkdir -p \$mountpoint; mountpoint -q \$mountpoint || mount \$device \$mountpoint"
+          }
+
+          mount_disk "$NODE0_PUB" "$NODE0_D2_DEVICE" /data/d2
+          mount_disk "$NODE1_PUB" "$NODE1_D2_DEVICE" /data/d2
+
+          for IP in "$NODE0_PUB" "$NODE1_PUB"; do
+            ssh $SSH_OPTS root@$IP "set -e; mkdir -p /data/d1; dpkg -i /root/warp.deb; chmod +x /root/mini-minio"
           done
 
           ENDPOINTS="--endpoint http://${NODE0_PRIV}:9000/data/d1 --endpoint http://${NODE0_PRIV}:9000/data/d2 --endpoint http://${NODE1_PRIV}:9000/data/d1 --endpoint http://${NODE1_PRIV}:9000/data/d2"
