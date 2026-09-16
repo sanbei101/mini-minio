@@ -374,15 +374,15 @@ jobs:
           done
 
           echo "===== iperf3 TCP NODE0 -> NODE1 ====="
-          ssh $SSH_OPTS root@$NODE1_PUB "pkill iperf3 2>/dev/null || true; nohup iperf3 -s -p 5201 >/root/iperf-server.log 2>&1 &"
+          ssh $SSH_OPTS root@$NODE1_PUB "pkill iperf3 2>/dev/null || true; nohup iperf3 -s -p 5201 >/dev/null 2>&1 &"
           sleep 1
-          ssh $SSH_OPTS root@$NODE0_PUB "iperf3 -c $NODE1_PRIV -p 5201 -t 30 -P 4" 2>&1 | grep -E '\[SUM\]|sender|receiver' || true
+          ssh $SSH_OPTS root@$NODE0_PUB "iperf3 -c $NODE1_PRIV -p 5201 -t 5 -P 4 -i 0" 2>&1 | grep -E '\[SUM\]|sender|receiver' || true
           ssh $SSH_OPTS root@$NODE1_PUB "pkill iperf3 2>/dev/null || true"
 
           echo "===== iperf3 TCP NODE1 -> NODE0 ====="
-          ssh $SSH_OPTS root@$NODE0_PUB "pkill iperf3 2>/dev/null || true; nohup iperf3 -s -p 5201 >/root/iperf-server.log 2>&1 &"
+          ssh $SSH_OPTS root@$NODE0_PUB "pkill iperf3 2>/dev/null || true; nohup iperf3 -s -p 5201 >/dev/null 2>&1 &"
           sleep 1
-          ssh $SSH_OPTS root@$NODE1_PUB "iperf3 -c $NODE0_PRIV -p 5201 -t 30 -P 4" 2>&1 | grep -E '\[SUM\]|sender|receiver' || true
+          ssh $SSH_OPTS root@$NODE1_PUB "iperf3 -c $NODE0_PRIV -p 5201 -t 5 -P 4 -i 0" 2>&1 | grep -E '\[SUM\]|sender|receiver' || true
           ssh $SSH_OPTS root@$NODE0_PUB "pkill iperf3 2>/dev/null || true"
 
       - name: Run VPC Intranet Warp Benchmark
