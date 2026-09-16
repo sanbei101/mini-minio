@@ -280,6 +280,8 @@ jobs:
           NODE0_PRIV=$(terraform output -json node_ips | jq -r '.node_0.private_ip')
           NODE1_PUB=$(terraform output -json node_ips | jq -r '.node_1.public_ip')
           NODE1_PRIV=$(terraform output -json node_ips | jq -r '.node_1.private_ip')
+          BENCH_PUB=$(terraform output -json bench_ip | jq -r '.public_ip')
+          BENCH_PRIV=$(terraform output -json bench_ip | jq -r '.private_ip')
           NODE0_D2_DEVICE=$(terraform output -json data_disk_devices | jq -r '.node_0_d2')
           NODE1_D2_DEVICE=$(terraform output -json data_disk_devices | jq -r '.node_1_d2')
 
@@ -287,6 +289,8 @@ jobs:
           echo "NODE0_PRIV=$NODE0_PRIV" >> $GITHUB_ENV
           echo "NODE1_PUB=$NODE1_PUB" >> $GITHUB_ENV
           echo "NODE1_PRIV=$NODE1_PRIV" >> $GITHUB_ENV
+          echo "BENCH_PUB=$BENCH_PUB" >> $GITHUB_ENV
+          echo "BENCH_PRIV=$BENCH_PRIV" >> $GITHUB_ENV
           echo "NODE0_D2_DEVICE=$NODE0_D2_DEVICE" >> $GITHUB_ENV
           echo "NODE1_D2_DEVICE=$NODE1_D2_DEVICE" >> $GITHUB_ENV
 
@@ -312,6 +316,7 @@ jobs:
 
           wait_node "$NODE0_PUB"
           wait_node "$NODE1_PUB"
+          wait_node "$BENCH_PUB"
 
       - name: Deploy mini-minio Cluster to ECS
         run: |
@@ -319,8 +324,9 @@ jobs:
           SSH_OPTS="-i .github/id_rsa_spot"
 
           for IP in "$NODE0_PUB" "$NODE1_PUB"; do
-            scp $SSH_OPTS mini-minio warp.deb root@$IP:/root/
+            scp $SSH_OPTS mini-minio root@$IP:/root/
           done
+          scp $SSH_OPTS warp.deb root@$BENCH_PUB:/root/
 
           mount_disk() {
             local ip=$1 device=$2 mountpoint=$3
@@ -328,15 +334,36 @@ jobs:
               if [ ! -b \$device ]; then device=\${device/xv/v}; fi; \
               if [ ! -b \$device ]; then lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS; exit 1; fi; \
               if ! blkid -s TYPE -o value \$device >/dev/null; then mkfs.ext4 -F \$device; fi; \
-              mkdir -p \$mountpoint; mountpoint -q \$mountpoint || mount \$device \$mountpoint"
+              mkdir -p \$mountpoint; mountpoint -q \$mountpoint || mount -o noatime,nodiratime,barrier=0,commit=60 \$device \$mountpoint"
           }
 
           mount_disk "$NODE0_PUB" "$NODE0_D2_DEVICE" /data/d2
           mount_disk "$NODE1_PUB" "$NODE1_D2_DEVICE" /data/d2
 
+          tune_node() {
+            local ip=$1
+            ssh $SSH_OPTS root@$ip "set -e; \
+              modprobe tcp_bbr 2>/dev/null || true; \
+              sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true; \
+              sysctl -w net.core.netdev_max_backlog=10000 2>/dev/null || true; \
+              sysctl -w net.core.rmem_max=16777216 2>/dev/null || true; \
+              sysctl -w net.core.wmem_max=16777216 2>/dev/null || true; \
+              sysctl -w net.ipv4.tcp_rmem='4096 87380 16777216' 2>/dev/null || true; \
+              sysctl -w net.ipv4.tcp_wmem='4096 65536 16777216' 2>/dev/null || true; \
+              sysctl -w net.ipv4.tcp_slow_start_after_idle=0 2>/dev/null || true; \
+              sysctl -w vm.dirty_background_bytes=67108864 2>/dev/null || true; \
+              sysctl -w vm.dirty_bytes=134217728 2>/dev/null || true; \
+              sysctl -w vm.vfs_cache_pressure=50 2>/dev/null || true; \
+              ip link set eth0 txqueuelen 5000 2>/dev/null || true"
+          }
+
           for IP in "$NODE0_PUB" "$NODE1_PUB"; do
-            ssh $SSH_OPTS root@$IP "set -e; mkdir -p /data/d1; dpkg -i /root/warp.deb; chmod +x /root/mini-minio; apt update -qq && apt install -y -qq sysstat iperf3"
+            tune_node "$IP"
+            ssh $SSH_OPTS root@$IP "set -e; mkdir -p /data/d1; chmod +x /root/mini-minio; apt update -qq && apt install -y -qq sysstat iperf3"
           done
+
+          tune_node "$BENCH_PUB"
+          ssh $SSH_OPTS root@$BENCH_PUB "set -e; dpkg -i /root/warp.deb; apt update -qq && apt install -y -qq iperf3"
 
           ENDPOINTS="--endpoint http://${NODE0_PRIV}:9000/data/d1 --endpoint http://${NODE0_PRIV}:9000/data/d2 --endpoint http://${NODE1_PRIV}:9000/data/d1 --endpoint http://${NODE1_PRIV}:9000/data/d2"
 
@@ -396,7 +423,7 @@ jobs:
           dump_stats()  { ruby stats.rb dump "$1"; }
 
           start_stats put
-          ssh $SSH_OPTS root@$NODE0_PUB "warp put \
+          ssh $SSH_OPTS root@$BENCH_PUB "warp put \
             --host=${NODE0_PRIV}:9000,${NODE1_PRIV}:9000 \
             --host-select=roundrobin \
             --access-key=minioadmin \
@@ -411,7 +438,7 @@ jobs:
           sleep 3
 
           start_stats get
-          ssh $SSH_OPTS root@$NODE0_PUB "warp get \
+          ssh $SSH_OPTS root@$BENCH_PUB "warp get \
             --host=${NODE0_PRIV}:9000,${NODE1_PRIV}:9000 \
             --host-select=roundrobin \
             --access-key=minioadmin \

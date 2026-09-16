@@ -132,6 +132,28 @@ resource "alicloud_ecs_disk_attachment" "data" {
   instance_id = alicloud_instance.spot_nodes[count.index].id
 }
 
+resource "alicloud_instance" "spot_bench" {
+  availability_zone          = data.alicloud_zones.default.zones[0].id
+  security_groups            = [alicloud_security_group.sg.id]
+  instance_type              = "ecs.e-c1m1.large"
+  system_disk_category       = "cloud_essd"
+  system_disk_size           = 20
+  image_id                   = data.alicloud_images.ubuntu.images[0].id
+  instance_name              = "spot-bench-client"
+  vswitch_id                 = alicloud_vswitch.vswitch.id
+  internet_max_bandwidth_out = 5
+
+  instance_charge_type = "PostPaid"
+  spot_strategy        = "SpotAsPriceGo"
+  auto_release_time    = timeadd(timestamp(), "1h")
+  resource_group_id    = var.resource_group_id
+  key_name             = alicloud_key_pair.key.key_pair_name
+
+  lifecycle {
+    ignore_changes = [auto_release_time]
+  }
+}
+
 output "node_ips" {
   description = "节点的公网与私网 IP 映射"
   value = {
@@ -140,6 +162,14 @@ output "node_ips" {
       public_ip  = inst.public_ip
       private_ip = inst.primary_ip_address
     }
+  }
+}
+
+output "bench_ip" {
+  description = "独立发压机的公网与私网 IP"
+  value = {
+    public_ip  = alicloud_instance.spot_bench.public_ip
+    private_ip = alicloud_instance.spot_bench.primary_ip_address
   }
 }
 
@@ -153,10 +183,13 @@ output "data_disk_devices" {
 
 output "ssh_commands" {
   description = "各节点 SSH 登录命令"
-  value = [
-    for inst in alicloud_instance.spot_nodes :
-    "ssh -i id_rsa_spot root@${inst.public_ip}"
-  ]
+  value = concat(
+    [
+      for inst in alicloud_instance.spot_nodes :
+      "ssh -i id_rsa_spot root@${inst.public_ip}"
+    ],
+    ["ssh -i id_rsa_spot root@${alicloud_instance.spot_bench.public_ip}"]
+  )
 }
 
 output "cluster_startup_commands" {

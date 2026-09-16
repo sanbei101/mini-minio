@@ -8,9 +8,9 @@ ssh_opts = ENV["SSH_OPTS"] || "-o StrictHostKeyChecking=no -o UserKnownHostsFile
 
 case action
 when "start"
-  cmd = "nohup iostat -x 2 13 > /root/#{tag}-iostat.log 2>&1 & " \
-        "nohup mpstat -P ALL 2 13 > /root/#{tag}-mpstat.log 2>&1 & " \
-        "nohup sar -n DEV 2 13 > /root/#{tag}-net.log 2>&1 &"
+  cmd = "env LC_ALL=C nohup iostat -x 2 13 > /root/#{tag}-iostat.log 2>&1 & " \
+        "env LC_ALL=C nohup mpstat -P ALL 2 13 > /root/#{tag}-mpstat.log 2>&1 & " \
+        "env LC_ALL=C nohup sar -n DEV 2 13 > /root/#{tag}-net.log 2>&1 &"
   nodes.each do |ip|
     system("ssh #{ssh_opts} root@#{ip} #{cmd.inspect}")
   end
@@ -23,13 +23,15 @@ when "dump"
     iostat_raw = `ssh #{ssh_opts} root@#{ip} "cat /root/#{tag}-iostat.log" 2>/dev/null`
     headers = []
     disks = Hash.new { |h, k| h[k] = { r: 0.0, w: 0.0, u: 0.0, n: 0 } }
+    report_num = 0
 
     iostat_raw.each_line do |line|
       cols = line.split
       next if cols.empty?
       if cols[0] == "Device"
         headers = cols
-      elsif cols[0] =~ /^[vs]d[a-z]$|^nvme\d+n\d+$/
+        report_num += 1
+      elsif report_num > 1 && (cols[0] =~ /^[vs]d[a-z]$|^nvme\d+n\d+$/)
         r_idx = headers.index("rkB/s")
         w_idx = headers.index("wkB/s")
         u_idx = headers.index("%util")
@@ -59,19 +61,31 @@ when "dump"
     mpstat_raw.each_line do |line|
       cols = line.split
       next if cols.empty?
-      if cols[1] == "CPU"
-        cpu_headers = cols
-      elsif cols[0] =~ /^[0-9]/ && cols[1] == "all"
+      if cols.include?("CPU")
+        cpu_pos = cols.index("CPU")
+        cpu_headers = cols[cpu_pos..]
+      elsif cpu_headers.any? && cols.include?("all")
+        all_pos = cols.index("all")
         u_idx  = cpu_headers.index("%usr")
         s_idx  = cpu_headers.index("%sys")
         io_idx = cpu_headers.index("%iowait")
         so_idx = cpu_headers.index("%soft")
         if u_idx && s_idx && io_idx && so_idx
-          usr  += cols[u_idx].to_f
-          sys  += cols[s_idx].to_f
-          iow  += cols[io_idx].to_f
-          soft += cols[so_idx].to_f
-          n_cpu += 1
+          # 优先使用 mpstat 尾部的 Average 行
+          if cols[0] =~ /^(Average:|平均时间:)/
+            usr = cols[all_pos + u_idx].to_f
+            sys = cols[all_pos + s_idx].to_f
+            iow = cols[all_pos + io_idx].to_f
+            soft = cols[all_pos + so_idx].to_f
+            n_cpu = 1
+            break
+          else
+            usr  += cols[all_pos + u_idx].to_f
+            sys  += cols[all_pos + s_idx].to_f
+            iow  += cols[all_pos + io_idx].to_f
+            soft += cols[all_pos + so_idx].to_f
+            n_cpu += 1
+          end
         end
       end
     end
@@ -87,7 +101,7 @@ when "dump"
     net_raw = `ssh #{ssh_opts} root@#{ip} "cat /root/#{tag}-net.log" 2>/dev/null`
     net_raw.each_line do |line|
       cols = line.split
-      next unless cols[0] == "Average:" && cols[1] != "IFACE" && cols[1] != "lo"
+      next unless (cols[0] == "Average:" || cols[0] == "平均时间:") && cols[1] != "IFACE" && cols[1] != "lo"
       # sar -n DEV 标准输出中 cols[4] 为 rxkB/s，cols[5] 为 txkB/s
       puts sprintf("%s avg: rx=%.1fMB/s tx=%.1fMB/s", cols[1], cols[4].to_f / 1024.0, cols[5].to_f / 1024.0)
     end
