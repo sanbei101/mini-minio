@@ -294,7 +294,7 @@ jobs:
         working-directory: .github
         run: |
           set -euo pipefail
-          SSH_OPTS="-i id_rsa_spot"
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5 -i id_rsa_spot"
 
           wait_node() {
             local ip=$1
@@ -312,10 +312,6 @@ jobs:
 
           wait_node "$NODE0_PUB"
           wait_node "$NODE1_PUB"
-          mkdir -p ~/.ssh
-          ssh-keyscan -H "$NODE0_PUB" >> ~/.ssh/known_hosts
-          ssh-keyscan -H "$NODE1_PUB" >> ~/.ssh/known_hosts
-          echo "Host keys added to known_hosts."
 
       - name: Deploy mini-minio Cluster to ECS
         run: |
