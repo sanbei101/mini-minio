@@ -260,7 +260,6 @@ jobs:
           GOAMD64: v3
         run: go build -trimpath -ldflags="-s -w" -o mini-minio .
 
-
       - name: Download Warp Package
         run: |
           wget https://dl.min.io/aistor/warp/release/linux-amd64/warp.deb -O warp.deb
@@ -295,7 +294,7 @@ jobs:
         working-directory: .github
         run: |
           set -euo pipefail
-          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -i id_rsa_spot"
+          SSH_OPTS="-i id_rsa_spot"
 
           wait_node() {
             local ip=$1
@@ -313,11 +312,15 @@ jobs:
 
           wait_node "$NODE0_PUB"
           wait_node "$NODE1_PUB"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$NODE0_PUB" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$NODE1_PUB" >> ~/.ssh/known_hosts
+          echo "Host keys added to known_hosts."
 
       - name: Deploy mini-minio Cluster to ECS
         run: |
           set -euo pipefail
-          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i .github/id_rsa_spot"
+          SSH_OPTS="-i .github/id_rsa_spot"
 
           for IP in "$NODE0_PUB" "$NODE1_PUB"; do
             scp $SSH_OPTS mini-minio warp.deb root@$IP:/root/
@@ -367,7 +370,7 @@ jobs:
         working-directory: .github
         run: |
           set -euo pipefail
-          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i id_rsa_spot"
+          SSH_OPTS="-i id_rsa_spot"
 
           for IP in "$NODE0_PUB" "$NODE1_PUB"; do
             echo "===== hardware on $IP ====="
@@ -390,28 +393,11 @@ jobs:
         working-directory: .github
         run: |
           set -euo pipefail
-          SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i id_rsa_spot"
+          SSH_OPTS="-i id_rsa_spot"
 
           # Collect CPU/disk/network counters on both nodes during each benchmark.
-          start_stats() {
-            local tag=$1
-            for IP in "$NODE0_PUB" "$NODE1_PUB"; do
-              ssh $SSH_OPTS root@$IP "nohup iostat -x 2 13 >/root/${tag}-iostat.log 2>&1 & nohup mpstat -P ALL 2 13 >/root/${tag}-mpstat.log 2>&1 & nohup sar -n DEV 2 13 >/root/${tag}-net.log 2>&1 &"
-            done
-          }
-
-          dump_stats() {
-            local tag=$1
-            echo "##### $tag resource usage #####"
-            for IP in "$NODE0_PUB" "$NODE1_PUB"; do
-              echo "--- $IP disks ---"
-              ssh $SSH_OPTS root@$IP 'awk '\''$1=="Device"{for(i=1;i<=NF;i++)h[$i]=i;next} $1~/^[vs]d[a-z]$/||$1~/^nvme[0-9]n[0-9]$/{rd[$1]+=$(h["rkB/s"]);wr[$1]+=$(h["wkB/s"]);u[$1]+=$(h["%util"]);n[$1]++} END{for(d in n)printf "%s avg: read=%.1fMB/s write=%.1fMB/s util=%.0f%%\n",d,rd[d]/n[d]/1024,wr[d]/n[d]/1024,u[d]/n[d]}' /root/'"$tag"'-iostat.log' || true
-              echo "--- $IP cpu ---"
-              ssh $SSH_OPTS root@$IP 'awk '\''$2=="CPU"{for(i=3;i<=NF;i++){if($i=="%usr")u=i;if($i=="%sys")s=i;if($i=="%iowait")io=i;if($i=="%soft")so=i};next} $1~/^[0-9]/&&$2=="all"{usr+=$u;sys+=$s;iow+=$io;soft+=$so;n++} END{if(n)printf "avg: user=%.1f%% system=%.1f%% iowait=%.1f%% softirq=%.1f%%\n",usr/n,sys/n,iow/n,soft/n;else print "no samples"}' /root/'"$tag"'-mpstat.log' || true
-              echo "--- $IP network ---"
-              ssh $SSH_OPTS root@$IP 'awk '\''$1=="Average:"&&$2!="IFACE"&&$2!="lo"{printf "%s avg: rx=%.1fMB/s tx=%.1fMB/s\n",$2,$5/1024,$6/1024}' /root/'"$tag"'-net.log' || true
-            done
-          }
+          start_stats() { ruby stats.rb start "$1"; }
+          dump_stats()  { ruby stats.rb dump "$1"; }
 
           start_stats put
           ssh $SSH_OPTS root@$NODE0_PUB "warp put \
