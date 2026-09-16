@@ -12,6 +12,10 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.9.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.9.1"
+    }
   }
 }
 
@@ -83,8 +87,12 @@ resource "local_file" "private_key" {
   file_permission = "0600"
 }
 
+resource "random_id" "tag" {
+  byte_length = 4
+}
+
 resource "alicloud_key_pair" "key" {
-  key_pair_name     = "spot-test-key"
+  key_pair_name     = "spot-test-key-${random_id.tag.hex}"
   public_key        = tls_private_key.ssh_key.public_key_openssh
   resource_group_id = var.resource_group_id
 }
