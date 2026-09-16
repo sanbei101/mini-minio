@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"sort"
@@ -21,6 +22,33 @@ import (
 	"github.com/sanbei101/mini-minio/internal/erasure"
 	"github.com/sanbei101/mini-minio/internal/storage"
 )
+
+// hashOrder hashes input key to return a consistent hashed integer slice (1-based indices).
+// This matches MinIO's distribution algorithm.
+func hashOrder(key string, cardinality int) []int {
+	if cardinality <= 0 {
+		return nil
+	}
+	nums := make([]int, cardinality)
+	keyCrc := crc32.ChecksumIEEE([]byte(key))
+	start := int(keyCrc % uint32(cardinality))
+	for i := 1; i <= cardinality; i++ {
+		nums[i-1] = 1 + ((start + i) % cardinality)
+	}
+	return nums
+}
+
+// shuffleDisks reorders disks based on the distribution slice.
+func shuffleDisks[T any](disks []T, distribution []int) []T {
+	if len(distribution) != len(disks) {
+		return disks
+	}
+	shuffled := make([]T, len(disks))
+	for i, blockIndex := range distribution {
+		shuffled[blockIndex-1] = disks[i]
+	}
+	return shuffled
+}
 
 // xlMeta is the per-object metadata stored as xl.meta on each disk.
 type xlMeta struct {
@@ -37,6 +65,7 @@ type xlMeta struct {
 	Parts        []ObjectPartInfo  `json:"parts"`
 	UserMeta     map[string]string `json:"userMeta,omitempty"`
 	DiskIndex    int               `json:"diskIndex"`
+	Distribution []int             `json:"distribution,omitempty"`
 }
 
 // erasureObjects implements ObjectLayer using erasure coding across multiple disks.
@@ -239,10 +268,15 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 	}
 	defer lock.Unlock()
 
-	oldMeta, err := e.readMeta(ctx, bucket, object)
-	if err != nil && !errors.Is(err, ErrObjectNotFound) {
-		return ObjectInfo{}, err
+	type metaResult struct {
+		meta *xlMeta
+		err  error
 	}
+	oldMetaCh := make(chan metaResult, 1)
+	go func() {
+		m, err := e.readMeta(ctx, bucket, object)
+		oldMetaCh <- metaResult{meta: m, err: err}
+	}()
 
 	dataDir := uuid.New().String()
 	n, err := e.writePart(ctx, bucket, object, dataDir, 1, data)
@@ -251,8 +285,16 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		return ObjectInfo{}, err
 	}
 
+	res := <-oldMetaCh
+	if res.err != nil && !errors.Is(res.err, ErrObjectNotFound) {
+		e.cleanupObjectData(ctx, bucket, object, dataDir, nil)
+		return ObjectInfo{}, res.err
+	}
+	oldMeta := res.meta
+
 	etag := data.MD5()
 	now := time.Now().UTC()
+	distribution := hashOrder(object, len(e.disks))
 	meta := xlMeta{
 		Name:         object,
 		Bucket:       bucket,
@@ -265,6 +307,7 @@ func (e *erasureObjects) PutObject(ctx context.Context, bucket, object string, d
 		ParityBlocks: e.parityBlocks,
 		BlockSize:    erasure.BlockSize,
 		Parts:        []ObjectPartInfo{{Number: 1, Size: e.erasureEngine.ShardFileSize(n), ActualSize: n}},
+		Distribution: distribution,
 	}
 	if err := e.commitMeta(ctx, bucket, object, oldMeta, &meta); err != nil {
 		return ObjectInfo{}, err
@@ -287,10 +330,12 @@ func (e *erasureObjects) writePart(
 	data *PutObjReader,
 ) (int64, error) {
 	enc := e.erasureEngine
-	writers := make([]io.Writer, len(e.disks))
-	files := make([]storage.ShardWriter, len(e.disks))
+	distribution := hashOrder(object, len(e.disks))
+	orderedDisks := shuffleDisks(e.disks, distribution)
+	writers := make([]io.Writer, len(orderedDisks))
+	files := make([]storage.ShardWriter, len(orderedDisks))
 
-	for i, d := range e.disks {
+	for i, d := range orderedDisks {
 		f, ferr := d.CreateShardFile(ctx, bucket, object, dataDir, partNum)
 		if ferr != nil {
 			for j := range i {
@@ -530,8 +575,12 @@ func (e *erasureObjects) decodeObject(
 	offset, length int64,
 	enc erasure.Erasure,
 ) error {
+	dist := meta.Distribution
+	if len(dist) == 0 {
+		dist = hashOrder(meta.Name, len(e.disks))
+	}
 	if len(meta.Parts) <= 1 {
-		readers, closers := e.openShardReaders(ctx, meta.Bucket, meta.Name, meta.DataDir, 1)
+		readers, closers := e.openShardReaders(ctx, meta.Bucket, meta.Name, meta.DataDir, 1, dist)
 		decodeErr := enc.Decode(ctx, dst, readers, offset, length, meta.Size)
 		return errors.Join(decodeErr, closeShardReaders(closers))
 	}
@@ -548,7 +597,7 @@ func (e *erasureObjects) decodeObject(
 			continue
 		}
 
-		readers, closers := e.openShardReaders(ctx, meta.Bucket, meta.Name, meta.DataDir, part.Number)
+		readers, closers := e.openShardReaders(ctx, meta.Bucket, meta.Name, meta.DataDir, part.Number, dist)
 		err := enc.Decode(ctx, dst, readers, start-partStart, end-start, part.ActualSize)
 		closeErr := closeShardReaders(closers)
 		if err = errors.Join(err, closeErr); err != nil {
@@ -562,10 +611,12 @@ func (e *erasureObjects) openShardReaders(
 	ctx context.Context,
 	bucket, object, dataDir string,
 	partNumber int,
+	distribution []int,
 ) ([]io.ReaderAt, []io.Closer) {
-	readers := make([]io.ReaderAt, len(e.disks))
-	closers := make([]io.Closer, len(e.disks))
-	for i, disk := range e.disks {
+	orderedDisks := shuffleDisks(e.disks, distribution)
+	readers := make([]io.ReaderAt, len(orderedDisks))
+	closers := make([]io.Closer, len(orderedDisks))
+	for i, disk := range orderedDisks {
 		reader, err := disk.ReadShardFile(ctx, bucket, object, dataDir, partNumber)
 		if err == nil {
 			readers[i] = reader
@@ -804,6 +855,7 @@ func (e *erasureObjects) CompleteMultipartUpload(
 	}
 	now := time.Now().UTC()
 	etag := multipartETag(parts)
+	distribution := hashOrder(object, len(e.disks))
 	meta := xlMeta{
 		Name:         object,
 		Bucket:       bucket,
@@ -816,6 +868,7 @@ func (e *erasureObjects) CompleteMultipartUpload(
 		ParityBlocks: e.parityBlocks,
 		BlockSize:    erasure.BlockSize,
 		Parts:        parts,
+		Distribution: distribution,
 	}
 	if err := e.commitMeta(ctx, bucket, object, oldMeta, &meta); err != nil {
 		return ObjectInfo{}, err

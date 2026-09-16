@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +17,22 @@ import (
 
 	"github.com/sanbei101/mini-minio/internal/storage"
 )
+
+var storageHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:        1024,
+		MaxIdleConnsPerHost: 256,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 5 * time.Second,
+		WriteBufferSize:     64 << 10,
+		ReadBufferSize:      64 << 10,
+	},
+}
 
 type storageRESTClient struct {
 	baseURL    url.URL
@@ -31,7 +48,7 @@ func newStorageRESTClient(endpoint *url.URL, driveID, secret, configHash string)
 		driveID:    driveID,
 		secret:     secret,
 		configHash: configHash,
-		client:     http.DefaultClient,
+		client:     storageHTTPClient,
 	}
 }
 

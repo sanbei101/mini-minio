@@ -281,3 +281,62 @@ func setHasObjectMeta(t *testing.T, disks []string, bucket string) bool {
 	}
 	return false
 }
+
+func TestDiskShuffleRotation(t *testing.T) {
+	ctx := context.Background()
+	disks := make([]string, 4)
+	for i := range disks {
+		disks[i] = t.TempDir()
+	}
+
+	obj, err := cmd.NewErasureSets(disks, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := obj.MakeBucket(ctx, "shuffle-bucket"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write 20 objects with different names and check that shard placement rotates.
+	seenFirstDisks := make(map[int]bool)
+	for i := range 20 {
+		name := fmt.Sprintf("obj-%d", i)
+		data := fmt.Sprintf("hello world %d", i)
+		r, err := cmd.NewPutObjReader(bytes.NewReader([]byte(data)), int64(len(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := obj.PutObject(ctx, "shuffle-bucket", name, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Size != int64(len(data)) {
+			t.Fatalf("expected size %d, got %d", len(data), info.Size)
+		}
+
+		// Read back object to verify integrity.
+		reader, err := obj.GetObjectNInfo(ctx, "shuffle-bucket", name, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		readBytes, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(readBytes) != data {
+			t.Fatalf("expected %q, got %q", data, string(readBytes))
+		}
+	}
+
+	// Verify that part_1 was written to different disks across the 20 objects.
+	for _, disk := range disks {
+		matches, _ := filepath.Glob(filepath.Join(disk, "shuffle-bucket", "obj-*", "*", "part.1"))
+		if len(matches) > 0 {
+			seenFirstDisks[len(seenFirstDisks)] = true
+		}
+	}
+	if len(seenFirstDisks) < 2 {
+		t.Fatalf("expected shards to be distributed to multiple disks, but only saw %d disks", len(seenFirstDisks))
+	}
+}

@@ -13,7 +13,7 @@ func NewBufferedShardWriter(ctx context.Context, dst ShardWriter, capacity int) 
 	w := &bufferedShardWriter{
 		ctx:    ctx,
 		dst:    dst,
-		chunks: make(chan []byte, capacity),
+		chunks: make(chan *[]byte, capacity),
 		done:   make(chan struct{}),
 	}
 	go w.run()
@@ -23,7 +23,7 @@ func NewBufferedShardWriter(ctx context.Context, dst ShardWriter, capacity int) 
 type bufferedShardWriter struct {
 	ctx    context.Context
 	dst    ShardWriter
-	chunks chan []byte
+	chunks chan *[]byte
 	done   chan struct{}
 
 	stateMu sync.Mutex
@@ -31,6 +31,30 @@ type bufferedShardWriter struct {
 	err     error
 	closed  bool
 	once    sync.Once
+}
+
+var chunkPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 1<<20)
+		return &b
+	},
+}
+
+func getChunkBuffer(size int) *[]byte {
+	bp := chunkPool.Get().(*[]byte)
+	if cap(*bp) < size {
+		b := make([]byte, size)
+		return &b
+	}
+	*bp = (*bp)[:size]
+	return bp
+}
+
+func putChunkBuffer(bp *[]byte) {
+	if bp != nil && cap(*bp) >= 64<<10 && cap(*bp) <= 8<<20 {
+		*bp = (*bp)[:0]
+		chunkPool.Put(bp)
+	}
 }
 
 func (w *bufferedShardWriter) Write(p []byte) (int, error) {
@@ -45,9 +69,11 @@ func (w *bufferedShardWriter) Write(p []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	chunk := append([]byte(nil), p...)
+	chunk := getChunkBuffer(len(p))
+	copy(*chunk, p)
 	select {
 	case <-w.ctx.Done():
+		putChunkBuffer(chunk)
 		return 0, w.ctx.Err()
 	case w.chunks <- chunk:
 		return len(p), nil
@@ -77,7 +103,8 @@ func (w *bufferedShardWriter) Close() error {
 
 func (w *bufferedShardWriter) run() {
 	for chunk := range w.chunks {
-		_, err := w.dst.Write(chunk)
+		_, err := w.dst.Write(*chunk)
+		putChunkBuffer(chunk)
 		if err == nil {
 			continue
 		}
