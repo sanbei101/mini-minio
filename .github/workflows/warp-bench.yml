@@ -8,9 +8,7 @@ on:
 
 jobs:
   cluster-integration:
-    name: Distributed Cluster Integration
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -23,7 +21,7 @@ jobs:
 
       - name: Install mc, Warp, and zip
         run: |
-          wget https://dl.min.io/client/mc/release/linux-amd64/mc -O mc
+          wget https://dl.min.io/aistor/mc/release/linux-amd64/mc -O mc
           chmod +x mc
           sudo mv mc /usr/local/bin/
           wget https://dl.min.io/aistor/warp/release/linux-amd64/warp.deb -O warp.deb
@@ -173,7 +171,7 @@ jobs:
           echo '--- node-b.log ---'
           tail -n 100 node-b.log 2>/dev/null || true
 
-  warp-benchmark:
+  single-node-warp-benchmark:
     runs-on: ubuntu-latest
 
     steps:
@@ -188,7 +186,7 @@ jobs:
 
       - name: Install mc and warp
         run: |
-          wget https://dl.min.io/client/mc/release/linux-amd64/mc -O mc
+          wget https://dl.min.io/aistor/mc/release/linux-amd64/mc -O mc
           chmod +x mc
           sudo mv mc /usr/local/bin/
 
@@ -237,8 +235,7 @@ jobs:
   # 真实环境阶段：前置测试全部成功后拉起阿里云两台机器进行真实内网压测
   # =========================================================================
   aliyun-real-cluster-benchmark:
-    name: Real Cluster Benchmark on AliCloud
-    needs: [cluster-integration, warp-benchmark]
+    needs: [cluster-integration, single-node-warp-benchmark]
     runs-on: ubuntu-latest
     env:
       ALICLOUD_ACCESS_KEY: ${{ secrets.ALICLOUD_ACCESS_KEY }}
