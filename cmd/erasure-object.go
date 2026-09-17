@@ -692,8 +692,23 @@ func (e *erasureObjects) DeleteObject(ctx context.Context, bucket, object string
 	return info, nil
 }
 
-// readMeta reads xl.meta from all disks in parallel and picks the best via quorum.
+// readMeta reads xl.meta from disks. It first attempts to read and unmarshal xl.meta from
+// the first available online disk; if reading or parsing fails, it falls back to full parallel quorum voting.
 func (e *erasureObjects) readMeta(ctx context.Context, bucket, object string) (*xlMeta, error) {
+	for _, d := range e.disks {
+		if d == nil {
+			continue
+		}
+		data, err := d.ReadMeta(ctx, bucket, object)
+		if err != nil {
+			continue
+		}
+		var m xlMeta
+		if err := json.Unmarshal(data, &m); err == nil {
+			return &m, nil
+		}
+	}
+
 	metas := make([]*xlMeta, len(e.disks))
 	errs := make([]error, len(e.disks))
 	var wg sync.WaitGroup

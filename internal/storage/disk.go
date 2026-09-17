@@ -85,10 +85,18 @@ func (d *Disk) CreateShardFile(ctx context.Context, bucket, object, dataDir stri
 		return nil, err
 	}
 	dir := filepath.Join(d.path, bucket, object, dataDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
+	filePath := filepath.Join(dir, partName(partNum))
+	f, err := os.Create(filePath)
+	if err == nil {
+		return f, nil
 	}
-	return os.Create(filepath.Join(dir, partName(partNum)))
+	if os.IsNotExist(err) {
+		if mkdirErr := os.MkdirAll(dir, 0o755); mkdirErr != nil {
+			return nil, mkdirErr
+		}
+		return os.Create(filePath)
+	}
+	return nil, err
 }
 
 // ReadShardFile returns a ReaderAt for a shard file.
@@ -120,14 +128,18 @@ func (d *Disk) WriteMetaTmp(ctx context.Context, bucket, object string, data []b
 		return err
 	}
 	dir := filepath.Join(d.path, bucket, object)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	tmp := filepath.Join(dir, metaFile+".tmp")
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
+	err := os.WriteFile(tmp, data, 0o644)
+	if err == nil {
+		return nil
 	}
-	return nil
+	if os.IsNotExist(err) {
+		if mkdirErr := os.MkdirAll(dir, 0o755); mkdirErr != nil {
+			return mkdirErr
+		}
+		return os.WriteFile(tmp, data, 0o644)
+	}
+	return err
 }
 
 // RenameMeta atomically renames the temp metadata file to the final xl.meta.
@@ -160,10 +172,18 @@ func (d *Disk) WriteUploadMeta(ctx context.Context, bucket, object, uploadID, na
 		return err
 	}
 	dir := d.uploadDir(bucket, object, uploadID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+	target := filepath.Join(dir, name+".json")
+	err := os.WriteFile(target, data, 0o644)
+	if err == nil {
+		return nil
 	}
-	return os.WriteFile(filepath.Join(dir, name+".json"), data, 0o644)
+	if os.IsNotExist(err) {
+		if mkdirErr := os.MkdirAll(dir, 0o755); mkdirErr != nil {
+			return mkdirErr
+		}
+		return os.WriteFile(target, data, 0o644)
+	}
+	return err
 }
 
 func (d *Disk) ReadUploadMeta(ctx context.Context, bucket, object, uploadID, name string) ([]byte, error) {
