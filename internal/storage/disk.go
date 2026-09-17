@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -153,18 +154,18 @@ func (d *Disk) RenameMeta(ctx context.Context, bucket, object string) error {
 	return os.Rename(tmp, dst)
 }
 
-func (d *Disk) ReadMeta(ctx context.Context, bucket, object string) ([]byte, error) {
+func (d *Disk) ReadMeta(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(d.path, bucket, object, metaFile))
+	f, err := os.Open(filepath.Join(d.path, bucket, object, metaFile))
 	if os.IsNotExist(err) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	return data, nil
+	return f, nil
 }
 
 func (d *Disk) WriteUploadMeta(ctx context.Context, bucket, object, uploadID, name string, data []byte) error {
@@ -186,15 +187,18 @@ func (d *Disk) WriteUploadMeta(ctx context.Context, bucket, object, uploadID, na
 	return err
 }
 
-func (d *Disk) ReadUploadMeta(ctx context.Context, bucket, object, uploadID, name string) ([]byte, error) {
+func (d *Disk) ReadUploadMeta(ctx context.Context, bucket, object, uploadID, name string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(filepath.Join(d.uploadDir(bucket, object, uploadID), name+".json"))
+	f, err := os.Open(filepath.Join(d.uploadDir(bucket, object, uploadID), name+".json"))
 	if os.IsNotExist(err) {
 		return nil, ErrNotFound
 	}
-	return data, err
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
 }
 
 func (d *Disk) DeleteUpload(ctx context.Context, bucket, object, uploadID string) error {

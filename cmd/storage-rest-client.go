@@ -125,12 +125,9 @@ func (c *storageRESTClient) ListBuckets(ctx context.Context) ([]os.FileInfo, err
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	var buckets []storageRESTFileInfo
-	data, err := readStorageRESTBody(resp)
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(data, &buckets); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &buckets); err != nil {
 		return nil, err
 	}
 	infos := make([]os.FileInfo, len(buckets))
@@ -145,12 +142,9 @@ func (c *storageRESTClient) StatBucket(ctx context.Context, bucket string) (os.F
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	var info storageRESTFileInfo
-	data, err := readStorageRESTBody(resp)
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(data, &info); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &info); err != nil {
 		return nil, err
 	}
 	return info, nil
@@ -226,12 +220,12 @@ func (c *storageRESTClient) RenameMeta(ctx context.Context, bucket, object strin
 	return err
 }
 
-func (c *storageRESTClient) ReadMeta(ctx context.Context, bucket, object string) ([]byte, error) {
+func (c *storageRESTClient) ReadMeta(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
 	resp, err := c.call(ctx, http.MethodGet, "meta", objectValues(bucket, object), nil)
 	if err != nil {
 		return nil, err
 	}
-	return readStorageRESTBody(resp)
+	return resp.Body, nil
 }
 
 func (c *storageRESTClient) WriteUploadMeta(
@@ -250,7 +244,7 @@ func (c *storageRESTClient) WriteUploadMeta(
 func (c *storageRESTClient) ReadUploadMeta(
 	ctx context.Context,
 	bucket, object, uploadID, name string,
-) ([]byte, error) {
+) (io.ReadCloser, error) {
 	resp, err := c.call(
 		ctx,
 		http.MethodGet,
@@ -261,7 +255,7 @@ func (c *storageRESTClient) ReadUploadMeta(
 	if err != nil {
 		return nil, err
 	}
-	return readStorageRESTBody(resp)
+	return resp.Body, nil
 }
 
 func (c *storageRESTClient) DeleteUpload(ctx context.Context, bucket, object, uploadID string) error {
@@ -297,12 +291,9 @@ func (c *storageRESTClient) ListObjects(ctx context.Context, bucket, prefix stri
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	var names []string
-	data, err := readStorageRESTBody(resp)
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(data, &names); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &names); err != nil {
 		return nil, err
 	}
 	return names, nil
@@ -395,10 +386,4 @@ func uploadValues(bucket, object, uploadID, name string) url.Values {
 		values.Set("name", name)
 	}
 	return values
-}
-
-func readStorageRESTBody(resp *http.Response) ([]byte, error) {
-	data, readErr := io.ReadAll(resp.Body)
-	closeErr := resp.Body.Close()
-	return data, errors.Join(readErr, closeErr)
 }

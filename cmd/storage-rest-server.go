@@ -128,12 +128,15 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 			return
 		}
 		if r.Method == http.MethodGet {
-			data, err := drive.ReadMeta(r.Context(), bucket, object)
+			rc, err := drive.ReadMeta(r.Context(), bucket, object)
 			if err != nil {
 				writeStorageRESTError(w, err)
 				return
 			}
-			writeStorageRESTBody(w, data)
+			defer rc.Close()
+			if _, copyErr := io.Copy(w, rc); copyErr != nil {
+				log.Error().Err(copyErr).Msg("failed to copy meta to response")
+			}
 			return
 		}
 	case "rename-meta":
@@ -156,12 +159,15 @@ func serveStorageRESTOperation(w http.ResponseWriter, r *http.Request, drive *st
 			return
 		}
 		if r.Method == http.MethodGet {
-			data, err := drive.ReadUploadMeta(r.Context(), bucket, object, uploadID, name)
+			rc, err := drive.ReadUploadMeta(r.Context(), bucket, object, uploadID, name)
 			if err != nil {
 				writeStorageRESTError(w, err)
 				return
 			}
-			writeStorageRESTBody(w, data)
+			defer rc.Close()
+			if _, copyErr := io.Copy(w, rc); copyErr != nil {
+				log.Error().Err(copyErr).Msg("failed to copy upload meta to response")
+			}
 			return
 		}
 	case "upload":
@@ -230,13 +236,10 @@ func writeStorageRESTError(w http.ResponseWriter, err error) {
 }
 
 func writeStorageRESTJSON(w http.ResponseWriter, value any) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		writeStorageRESTError(w, err)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
-	writeStorageRESTBody(w, data)
+	if err := json.MarshalWrite(w, value); err != nil {
+		log.Error().Err(err).Msg("failed to write storage response")
+	}
 }
 
 func writeStorageRESTBody(w http.ResponseWriter, data []byte) {

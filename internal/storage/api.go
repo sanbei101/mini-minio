@@ -32,9 +32,9 @@ type API interface {
 
 	WriteMetaTmp(context.Context, string, string, []byte) error
 	RenameMeta(context.Context, string, string) error
-	ReadMeta(context.Context, string, string) ([]byte, error)
+	ReadMeta(context.Context, string, string) (io.ReadCloser, error)
 	WriteUploadMeta(context.Context, string, string, string, string, []byte) error
-	ReadUploadMeta(context.Context, string, string, string, string) ([]byte, error)
+	ReadUploadMeta(context.Context, string, string, string, string) (io.ReadCloser, error)
 	DeleteUpload(context.Context, string, string, string) error
 
 	DeleteObject(context.Context, string, string) error

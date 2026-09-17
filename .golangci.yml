@@ -23,13 +23,16 @@ linters:
         - opinionated
       disabled-tags:
         - experimental
+      disabled-checks:
+        - hugeParam # go
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
     revive:
       enable-default-rules: true
       rules:
         - name: unused-parameter
   exclusions:
-    paths:
-      - "copy"
     presets:
       - comments
       - common-false-positives

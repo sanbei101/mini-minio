@@ -41,8 +41,8 @@ var chunkPool = sync.Pool{
 }
 
 func getChunkBuffer(size int) *[]byte {
-	bp := chunkPool.Get().(*[]byte)
-	if cap(*bp) < size {
+	bp, ok := chunkPool.Get().(*[]byte)
+	if !ok || cap(*bp) < size {
 		b := make([]byte, size)
 		return &b
 	}

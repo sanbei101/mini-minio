@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -22,6 +23,12 @@ import (
 	"github.com/sanbei101/mini-minio/internal/erasure"
 	"github.com/sanbei101/mini-minio/internal/storage"
 )
+
+var metaBufferPool = sync.Pool{
+	New: func() any {
+		return bytes.NewBuffer(make([]byte, 0, 1024))
+	},
+}
 
 // hashOrder hashes input key to return a consistent hashed integer slice (1-based indices).
 // This matches MinIO's distribution algorithm.
@@ -393,12 +400,17 @@ func (e *erasureObjects) commitMeta(ctx context.Context, bucket, object string, 
 			defer wg.Done()
 			m := *meta
 			m.DiskIndex = idx
-			data, err := json.Marshal(&m)
-			if err != nil {
+			buf, ok := metaBufferPool.Get().(*bytes.Buffer)
+			if !ok {
+				buf = bytes.NewBuffer(make([]byte, 0, 1024))
+			}
+			buf.Reset()
+			defer metaBufferPool.Put(buf)
+			if err := json.MarshalWrite(buf, &m); err != nil {
 				metaErrs[idx] = err
 				return
 			}
-			if err := disk.WriteMetaTmp(ctx, bucket, object, data); err != nil {
+			if err := disk.WriteMetaTmp(ctx, bucket, object, buf.Bytes()); err != nil {
 				metaErrs[idx] = err
 				return
 			}
@@ -486,12 +498,18 @@ func (m *contextMutex) Unlock() {
 func (e *erasureObjects) objectLock(bucket, object string) *contextMutex {
 	key := bucket + "\x00" + object
 	lock, _ := e.objectLocks.LoadOrStore(key, newContextMutex())
-	return lock.(*contextMutex)
+	if cm, ok := lock.(*contextMutex); ok {
+		return cm
+	}
+	return newContextMutex()
 }
 
 func (e *erasureObjects) bucketLock(bucket string) *contextMutex {
 	lock, _ := e.bucketLocks.LoadOrStore(bucket, newContextMutex())
-	return lock.(*contextMutex)
+	if cm, ok := lock.(*contextMutex); ok {
+		return cm
+	}
+	return newContextMutex()
 }
 
 func (e *erasureObjects) cleanupObjectData(
@@ -699,12 +717,14 @@ func (e *erasureObjects) readMeta(ctx context.Context, bucket, object string) (*
 		if d == nil {
 			continue
 		}
-		data, err := d.ReadMeta(ctx, bucket, object)
+		rc, err := d.ReadMeta(ctx, bucket, object)
 		if err != nil {
 			continue
 		}
 		var m xlMeta
-		if err := json.Unmarshal(data, &m); err == nil {
+		err = json.UnmarshalRead(rc, &m)
+		rc.Close()
+		if err == nil {
 			return &m, nil
 		}
 	}
@@ -717,12 +737,14 @@ func (e *erasureObjects) readMeta(ctx context.Context, bucket, object string) (*
 		go func(idx int, disk storage.API) {
 			defer wg.Done()
 			var m xlMeta
-			data, err := disk.ReadMeta(ctx, bucket, object)
+			rc, err := disk.ReadMeta(ctx, bucket, object)
 			if err != nil {
 				errs[idx] = err
 				return
 			}
-			if err := json.Unmarshal(data, &m); err != nil {
+			err = json.UnmarshalRead(rc, &m)
+			rc.Close()
+			if err != nil {
 				errs[idx] = err
 				return
 			}
@@ -916,10 +938,16 @@ func (e *erasureObjects) writeUploadMeta(
 	bucket, object, uploadID, name string,
 	value any,
 ) error {
-	data, err := json.Marshal(value)
-	if err != nil {
+	buf, ok := metaBufferPool.Get().(*bytes.Buffer)
+	if !ok {
+		buf = bytes.NewBuffer(make([]byte, 0, 1024))
+	}
+	buf.Reset()
+	defer metaBufferPool.Put(buf)
+	if err := json.MarshalWrite(buf, value); err != nil {
 		return err
 	}
+	data := buf.Bytes()
 	errs := make([]error, len(e.disks))
 	var wg sync.WaitGroup
 	for i, disk := range e.disks {
@@ -971,9 +999,13 @@ func (e *erasureObjects) readUploadMeta(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		data, err := disk.ReadUploadMeta(ctx, bucket, object, uploadID, name)
+		rc, err := disk.ReadUploadMeta(ctx, bucket, object, uploadID, name)
 		if err == nil {
-			return json.Unmarshal(data, out)
+			err = json.UnmarshalRead(rc, out)
+			_ = rc.Close()
+			if err == nil {
+				return nil
+			}
 		}
 	}
 	return errors.New("multipart upload not found")
