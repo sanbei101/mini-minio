@@ -2,7 +2,7 @@ github.com/klauspost/cpuid/v2 v2.4.0 h1:S6Hrbc7+ywsr0r+RLapfGBHfyefhCTwEh3A0tV91
 github.com/klauspost/cpuid/v2 v2.4.0/go.mod h1:19jmZ9mjzoF//ddRSUsv0zfBTJWh3QJh9FNxZTMrGxU=
 github.com/klauspost/reedsolomon v1.14.2 h1:SafJYwpBBQBI6amHUygcjxZjXeN2HpiENHQDwuPWCCQ=
 github.com/klauspost/reedsolomon v1.14.2/go.mod h1:yjqqjgMTQkBUHSG97/rm4zipffCNbCiZcB3kTqr++sQ=
-github.com/phuslu/log v1.0.128 h1:g9dioj35SZiuFWBaIrHJjDyppIYdhhQpwZJ+DlLW//U=
-github.com/phuslu/log v1.0.128/go.mod h1:F8osGJADo5qLK/0F88djWwdyoZZ9xDJQL1HYRHFEkS0=
+github.com/phuslu/log v1.0.133 h1:BjoqIqO4gP1rNHJI6tBQ3hXtQ1PHvkG6RF9EzuM+qus=
+github.com/phuslu/log v1.0.133/go.mod h1:GYElPZLxBdIMMGZkGggLHDQ33zQJjqsHdJns+flCTyE=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
 golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
