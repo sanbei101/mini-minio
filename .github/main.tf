@@ -97,6 +97,14 @@ resource "alicloud_key_pair" "key" {
   resource_group_id = var.resource_group_id
 }
 
+locals {
+  common_user_data = <<-EOF
+    #!/bin/bash
+    export DEBIAN_FRONTEND=noninteractive
+    apt update -qq && apt install -y -qq --no-install-recommends sysstat iperf3
+  EOF
+}
+
 resource "alicloud_instance" "spot_nodes" {
   count                      = 2
   availability_zone          = data.alicloud_zones.default.zones[0].id
@@ -108,6 +116,7 @@ resource "alicloud_instance" "spot_nodes" {
   instance_name              = "spot-cluster-node-${count.index}"
   vswitch_id                 = alicloud_vswitch.vswitch.id
   internet_max_bandwidth_out = 5
+  user_data                  = local.common_user_data
 
   instance_charge_type = "PostPaid"
   spot_strategy        = "SpotAsPriceGo"
@@ -150,6 +159,7 @@ resource "alicloud_instance" "spot_bench" {
   instance_name              = "spot-bench-client"
   vswitch_id                 = alicloud_vswitch.vswitch.id
   internet_max_bandwidth_out = 5
+  user_data                  = local.common_user_data
 
   instance_charge_type = "PostPaid"
   spot_strategy        = "SpotAsPriceGo"

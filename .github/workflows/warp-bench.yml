@@ -314,19 +314,21 @@ jobs:
             return 1
           }
 
-          wait_node "$NODE0_PUB"
-          wait_node "$NODE1_PUB"
-          wait_node "$BENCH_PUB"
+          wait_node "$NODE0_PUB" &
+          PID_W0=$!
+          wait_node "$NODE1_PUB" &
+          PID_W1=$!
+          wait_node "$BENCH_PUB" &
+          PID_WB=$!
+
+          wait $PID_W0
+          wait $PID_W1
+          wait $PID_WB
 
       - name: Deploy mini-minio Cluster to ECS
         run: |
           set -euo pipefail
           SSH_OPTS="-i .github/id_rsa_spot"
-
-          for IP in "$NODE0_PUB" "$NODE1_PUB"; do
-            scp $SSH_OPTS mini-minio root@$IP:/root/
-          done
-          scp $SSH_OPTS warp.deb root@$BENCH_PUB:/root/
 
           mount_disk() {
             local ip=$1 device=$2 mountpoint=$3
@@ -336,9 +338,6 @@ jobs:
               if ! blkid -s TYPE -o value \$device >/dev/null; then mkfs.ext4 -F \$device; fi; \
               mkdir -p \$mountpoint; mountpoint -q \$mountpoint || mount -o noatime,nodiratime,barrier=0,commit=60 \$device \$mountpoint"
           }
-
-          mount_disk "$NODE0_PUB" "$NODE0_D2_DEVICE" /data/d2
-          mount_disk "$NODE1_PUB" "$NODE1_D2_DEVICE" /data/d2
 
           tune_node() {
             local ip=$1
@@ -357,43 +356,68 @@ jobs:
               ip link set eth0 txqueuelen 5000 2>/dev/null || true"
           }
 
-          for IP in "$NODE0_PUB" "$NODE1_PUB"; do
-            tune_node "$IP"
-            ssh $SSH_OPTS root@$IP "set -e; mkdir -p /data/d1; chmod +x /root/mini-minio; apt update -qq && apt install -y -qq sysstat iperf3"
-          done
-
-          tune_node "$BENCH_PUB"
-          ssh $SSH_OPTS root@$BENCH_PUB "set -e; dpkg -i /root/warp.deb; apt update -qq && apt install -y -qq iperf3"
-
           ENDPOINTS="--endpoint http://${NODE0_PRIV}:9000/data/d1 --endpoint http://${NODE0_PRIV}:9000/data/d2 --endpoint http://${NODE1_PRIV}:9000/data/d1 --endpoint http://${NODE1_PRIV}:9000/data/d2"
 
-          ssh $SSH_OPTS root@$NODE0_PUB "nohup /root/mini-minio \
-            --addr :9000 \
-            --node-url http://${NODE0_PRIV}:9000 \
-            --cluster-secret aliyun-cluster-secret \
-            --data-blocks 2 \
-            --parity-blocks 2 \
-            $ENDPOINTS \
-            --access-key minioadmin \
-            --secret-key minioadmin123 > /root/mini-minio.log 2>&1 &"
+          deploy_storage_node() {
+            local pub=$1 priv=$2 dev=$3
+            echo "==> Deploying storage node $pub ($priv)..."
+            scp -C $SSH_OPTS mini-minio root@$pub:/root/
+            mount_disk "$pub" "$dev" /data/d2
+            tune_node "$pub"
+            ssh $SSH_OPTS root@$pub "set -e; mkdir -p /data/d1; chmod +x /root/mini-minio; \
+              nohup /root/mini-minio \
+                --addr :9000 \
+                --node-url http://${priv}:9000 \
+                --cluster-secret aliyun-cluster-secret \
+                --data-blocks 2 \
+                --parity-blocks 2 \
+                $ENDPOINTS \
+                --access-key minioadmin \
+                --secret-key minioadmin123 > /root/mini-minio.log 2>&1 &"
+            echo "==> Storage node $pub ready."
+          }
 
-          ssh $SSH_OPTS root@$NODE1_PUB "nohup /root/mini-minio \
-            --addr :9000 \
-            --node-url http://${NODE1_PRIV}:9000 \
-            --cluster-secret aliyun-cluster-secret \
-            --data-blocks 2 \
-            --parity-blocks 2 \
-            $ENDPOINTS \
-            --access-key minioadmin \
-            --secret-key minioadmin123 > /root/mini-minio.log 2>&1 &"
+          deploy_bench_node() {
+            local pub=$1
+            echo "==> Deploying bench node $pub..."
+            scp -C $SSH_OPTS warp.deb root@$pub:/root/
+            tune_node "$pub"
+            ssh $SSH_OPTS root@$pub "set -e; dpkg -i /root/warp.deb"
+            echo "==> Bench node $pub ready."
+          }
 
-          sleep 5
+          deploy_storage_node "$NODE0_PUB" "$NODE0_PRIV" "$NODE0_D2_DEVICE" &
+          PID_N0=$!
+          deploy_storage_node "$NODE1_PUB" "$NODE1_PRIV" "$NODE1_D2_DEVICE" &
+          PID_N1=$!
+          deploy_bench_node "$BENCH_PUB" &
+          PID_NB=$!
+
+          wait $PID_N0
+          wait $PID_N1
+          wait $PID_NB
+
+          sleep 3
 
       - name: Profile node hardware and VPC network
         working-directory: .github
         run: |
           set -euo pipefail
           SSH_OPTS="-i id_rsa_spot"
+
+          ensure_ready() {
+            local ip=$1
+            for attempt in $(seq 1 30); do
+              if ssh $SSH_OPTS root@$ip "command -v iperf3 >/dev/null 2>&1"; then
+                return 0
+              fi
+              sleep 1
+            done
+          }
+          ensure_ready "$NODE0_PUB" &
+          ensure_ready "$NODE1_PUB" &
+          ensure_ready "$BENCH_PUB" &
+          wait
 
           for IP in "$NODE0_PUB" "$NODE1_PUB"; do
             echo "===== hardware on $IP ====="
