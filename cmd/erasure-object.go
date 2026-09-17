@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"hash/maphash"
 	"io"
 	"os"
 	"sort"
@@ -75,14 +76,20 @@ type xlMeta struct {
 	Distribution []int             `json:"distribution,omitempty"`
 }
 
+const (
+	objectLockStripes = 4096
+	bucketLockStripes = 256
+)
+
 // erasureObjects implements ObjectLayer using erasure coding across multiple disks.
 type erasureObjects struct {
 	disks         []storage.API
 	dataBlocks    int
 	parityBlocks  int
 	pool          *bpool.BytePoolCap
-	bucketLocks   sync.Map
-	objectLocks   sync.Map
+	hashSeed      maphash.Seed
+	bucketLocks   [bucketLockStripes]*contextMutex
+	objectLocks   [objectLockStripes]*contextMutex
 	erasureEngine erasure.Erasure
 }
 
@@ -96,13 +103,21 @@ func newErasureObjects(
 		return nil, err
 	}
 
-	return &erasureObjects{
+	eo := &erasureObjects{
 		disks:         disks,
 		dataBlocks:    dataBlocks,
 		parityBlocks:  parityBlocks,
 		pool:          pool,
+		hashSeed:      maphash.MakeSeed(),
 		erasureEngine: engine,
-	}, nil
+	}
+	for i := range eo.bucketLocks {
+		eo.bucketLocks[i] = newContextMutex()
+	}
+	for i := range eo.objectLocks {
+		eo.objectLocks[i] = newContextMutex()
+	}
+	return eo, nil
 }
 
 func (e *erasureObjects) statBucket(ctx context.Context, bucket string) (os.FileInfo, error) {
@@ -495,21 +510,19 @@ func (m *contextMutex) Unlock() {
 	}
 }
 
+type objectLockKey struct {
+	bucket string
+	object string
+}
+
 func (e *erasureObjects) objectLock(bucket, object string) *contextMutex {
-	key := bucket + "\x00" + object
-	lock, _ := e.objectLocks.LoadOrStore(key, newContextMutex())
-	if cm, ok := lock.(*contextMutex); ok {
-		return cm
-	}
-	return newContextMutex()
+	idx := maphash.Comparable(e.hashSeed, objectLockKey{bucket: bucket, object: object}) & (objectLockStripes - 1)
+	return e.objectLocks[idx]
 }
 
 func (e *erasureObjects) bucketLock(bucket string) *contextMutex {
-	lock, _ := e.bucketLocks.LoadOrStore(bucket, newContextMutex())
-	if cm, ok := lock.(*contextMutex); ok {
-		return cm
-	}
-	return newContextMutex()
+	idx := maphash.String(e.hashSeed, bucket) & (bucketLockStripes - 1)
+	return e.bucketLocks[idx]
 }
 
 func (e *erasureObjects) cleanupObjectData(
