@@ -26,11 +26,10 @@ type bufferedShardWriter struct {
 	chunks chan *[]byte
 	done   chan struct{}
 
-	stateMu sync.Mutex
-	errMu   sync.Mutex
-	err     error
-	closed  bool
-	once    sync.Once
+	mu     sync.Mutex
+	err    error
+	closed bool
+	once   sync.Once
 }
 
 var chunkPool = sync.Pool{
@@ -58,17 +57,15 @@ func putChunkBuffer(bp *[]byte) {
 }
 
 func (w *bufferedShardWriter) Write(p []byte) (int, error) {
-	w.stateMu.Lock()
-	defer w.stateMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.closed {
 		return 0, errors.New("write after close")
 	}
-	w.errMu.Lock()
-	err := w.err
-	w.errMu.Unlock()
-	if err != nil {
-		return 0, err
+	if w.err != nil {
+		return 0, w.err
 	}
+
 	chunk := getChunkBuffer(len(p))
 	copy(*chunk, p)
 	select {
@@ -82,42 +79,44 @@ func (w *bufferedShardWriter) Write(p []byte) (int, error) {
 
 func (w *bufferedShardWriter) Close() error {
 	w.once.Do(func() {
-		w.stateMu.Lock()
+		w.mu.Lock()
 		w.closed = true
 		close(w.chunks)
-		w.stateMu.Unlock()
+		w.mu.Unlock()
+
 		select {
 		case <-w.done:
 		case <-w.ctx.Done():
-			w.errMu.Lock()
-			if w.err == nil {
-				w.err = w.ctx.Err()
-			}
-			w.errMu.Unlock()
+			w.setErr(w.ctx.Err())
 		}
 	})
-	w.errMu.Lock()
-	defer w.errMu.Unlock()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.err
+}
+
+func (w *bufferedShardWriter) setErr(err error) {
+	if err == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.err == nil {
+		w.err = err
+	}
+	w.mu.Unlock()
 }
 
 func (w *bufferedShardWriter) run() {
 	for chunk := range w.chunks {
 		_, err := w.dst.Write(*chunk)
 		putChunkBuffer(chunk)
-		if err == nil {
-			continue
+		if err != nil {
+			w.setErr(err)
 		}
-		w.errMu.Lock()
-		w.err = err
-		w.errMu.Unlock()
 	}
 	if err := w.dst.Close(); err != nil {
-		w.errMu.Lock()
-		if w.err == nil {
-			w.err = err
-		}
-		w.errMu.Unlock()
+		w.setErr(err)
 	}
 	close(w.done)
 }
