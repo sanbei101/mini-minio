@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/klauspost/reedsolomon v1.14.2
-	github.com/phuslu/log v1.0.133
+	github.com/phuslu/log v1.0.134
 )
 
 require (
